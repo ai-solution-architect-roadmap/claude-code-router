@@ -62,6 +62,8 @@ class Risk:
     memory_flags: list[MemoryFlag] = field(default_factory=list)
     evaluated: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    dependents: int | None = None          # files depending on the located set (graph only)
+    tests: str | None = None               # direct | name-matched | none (graph only)
 
     @property
     def critical(self) -> bool:
@@ -148,6 +150,7 @@ def assess_risk(location, task: str, cfg, graph=None, memory=None) -> Risk:
         if value > best[name][0] or (best[name][2] is None and detail):
             best[name] = (value, detail, path)
 
+    test_rank = {"none": 0, "name-matched": 1, "direct": 2}
     if graph is not None:
         full_blast = math.log2(1 + rc["blast_full"])
         for c in prim:
@@ -175,6 +178,9 @@ def assess_risk(location, task: str, cfg, graph=None, memory=None) -> Risk:
             if not c.is_test:
                 tests = graph.tests_for(c.path)
                 linked = [t for t in tests if t.reason != "name"]
+                kind = "direct" if linked else "name-matched" if tests else "none"
+                if risk.tests is None or test_rank[kind] > test_rank[risk.tests]:
+                    risk.tests = kind
                 if not tests:
                     offer("test_proximity", 1.0 * s, f"no tests found for {c.path}", c.path)
                 elif not linked:
@@ -191,6 +197,7 @@ def assess_risk(location, task: str, cfg, graph=None, memory=None) -> Risk:
                       f"author(s) in {ch['window_days']}d", c.path)
         if prim:
             blast_union -= {c.path for c in prim}
+            risk.dependents = len(blast_union)
             if len(prim) > 1 and blast_union:
                 v, d, p = best["blast_radius"]
                 best["blast_radius"] = (v, d + f"; {len(blast_union)} across all candidates", p)

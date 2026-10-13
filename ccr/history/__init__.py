@@ -12,7 +12,10 @@ import time
 from pathlib import Path
 
 FIELDS = ("ts", "session", "class", "area", "tier", "model", "effort", "outcome", "tokens",
-          "cost_usd", "turns", "risk", "confidence", "escalated_from", "source")
+          "cost_usd", "turns", "risk", "confidence", "escalated_from", "source",
+          # hook-recorded signals (no prompt text): main-session model, subagents used
+          # ({agent_type: count}), tool errors seen, outcome hints
+          "main_model", "agents", "tool_errors", "signals")
 OUTCOMES = ("success", "failure", "escalated", "abandoned")
 SUCCESS = {"success"}
 FAILURE = {"failure", "escalated"}

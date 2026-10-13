@@ -16,6 +16,7 @@ from ccr.evaluate import text as T
 BROAD_WORD_FILES = 25     # a word matching more files than this is too broad to use
 MAX_CANDIDATES = 40
 MAX_OTHER_FILES = 5000    # non-graph files (docs, config, IaC) considered for matching
+TOOL_CONFIG_PREFIXES = (".claude/", ".ccr/")
 _CODE_EXT_PARTS = {"py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "go", "rs", "java", "kt",
                    "rb", "php", "cs", "c", "h", "cc", "cpp", "hpp", "swift", "scala", "zig", "md",
                    "json", "yaml", "yml", "toml", "txt", "lua", "ex", "exs", "dart", "sh"}
@@ -110,6 +111,11 @@ def _universe(root: Path, graph) -> tuple[list[str], set[str], set[str]]:
     from ccr.graph.files import in_skipped_dir, is_skipped_name, is_test_path
     for p in listed:
         if p in indexed or in_skipped_dir(p) or is_skipped_name(posixpath.basename(p)):
+            continue
+        # Claude Code's own config (agents, settings, commands) is not project code: its
+        # words ("explore", "implement", "tests") would match ordinary prompts. Named paths
+        # still resolve through the is_file() fallback in locate().
+        if p.startswith(TOOL_CONFIG_PREFIXES):
             continue
         others.append(p)
     if len(others) > MAX_OTHER_FILES:   # huge trees: keep the shallowest non-code files

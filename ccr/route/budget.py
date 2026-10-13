@@ -88,28 +88,9 @@ def read_statusline_usage(root: str | Path, cfg, now: float) -> tuple[float | No
 
 
 def transcript_tokens(path: str | Path) -> int:
-    """Sum of input + output + cache-creation tokens over assistant messages."""
-    total = 0
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if '"usage"' not in line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                msg = obj.get("message") if isinstance(obj, dict) else None
-                usage = msg.get("usage") if isinstance(msg, dict) else None
-                if not isinstance(usage, dict):
-                    continue
-                for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens"):
-                    v = usage.get(k)
-                    if isinstance(v, int) and not isinstance(v, bool):
-                        total += v
-    except OSError:
-        return 0
-    return total
+    """Input + output + cache-creation tokens, counted once per assistant message."""
+    from ccr.transcript import read_usage
+    return read_usage(path, complete_only=False).tokens
 
 
 def token_fallback(root: str | Path, cfg, now: float,
