@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,8 +13,6 @@ import typer
 
 app = typer.Typer(help="Route Claude Code tasks to the cheapest sufficient model.",
                   no_args_is_help=True, add_completion=False)
-graph_app = typer.Typer(help="Code graph commands.", no_args_is_help=True)
-app.add_typer(graph_app, name="graph")
 
 log = logging.getLogger("ccr")
 
@@ -78,15 +75,66 @@ def feedback(verdict: Optional[str] = typer.Argument(None)) -> None:
     _stub("feedback")
 
 
-@graph_app.command("build")
-def graph_build() -> None:
-    """Build or refresh the code graph."""
-    _stub("graph build")
-
-
-@graph_app.callback()
-def _graph_cb() -> None:
-    pass
+@app.command()
+def graph(rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuild the graph"),
+          stats: bool = typer.Option(False, "--stats", help="Show graph statistics"),
+          query: Optional[str] = typer.Option(None, "--query", help="Look up a symbol"),
+          offline: bool = typer.Option(False, "--offline", help="Never download grammars"),
+          path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Build/refresh the code graph (incremental), or inspect it."""
+    from ccr.graph import Graph, update
+    root = path.resolve()
+    if rebuild or not (stats or query):
+        r = update(root, rebuild=rebuild, offline=offline or None)
+        kind = "built" if r.full else "updated"
+        typer.echo(f"graph {kind} ({r.mode}): {r.scanned} files, parsed {r.parsed}, "
+                   f"unchanged {r.unchanged}, added {r.added}, removed {r.removed} "
+                   f"in {r.elapsed:.2f}s")
+        if r.parsers:
+            typer.echo("  parsers: " + ", ".join(f"{k} {v}" for k, v in r.parsers.items()))
+    g = Graph.open(root)
+    if g is None:
+        if stats or query:
+            typer.echo("graph not built yet; run `ccr graph`")
+            raise typer.Exit(1)
+        return
+    with g:
+        if stats:
+            st = g.stats()
+            meta = st["meta"]
+            typer.echo(f"Files:    {st['files']} ({st['tests']} tests)")
+            typer.echo(f"Symbols:  {st['symbols']} "
+                       f"({', '.join(f'{k} {v}' for k, v in st['symbol_kinds'].items())})")
+            typer.echo(f"Edges:    {', '.join(f'{k} {v}' for k, v in st['edges'].items()) or 'none'}")
+            typer.echo(f"Languages: {', '.join(f'{k} {v}' for k, v in st['languages'].items())}")
+            typer.echo(f"Parsers:  {', '.join(f'{k} {v}' for k, v in st['parsers'].items())}")
+            typer.echo(f"Unresolved imports (external or unknown): {st['unresolved_imports']}")
+            typer.echo(f"Mode:     {meta.get('mode')}  commit {(meta.get('commit') or '-')[:12]}")
+            typer.echo(f"Churn:    {st['churn_files']} files over {meta.get('churn_days', '-')} days")
+            hot = g.hot_files(5)
+            if hot:
+                typer.echo("Hot files: " + ", ".join(f"{h['path']} ({h['commits']})" for h in hot))
+            typer.echo(f"DB size:  {st['db_bytes'] // 1024} KiB")
+        if query:
+            found = g.lookup(query)
+            if not found:
+                typer.echo(f"no symbol matching {query!r}")
+                raise typer.Exit(1)
+            for s in found:
+                typer.echo(f"{s.kind:<9} {s.qualname}  {s.path}:{s.start_line}-{s.end_line}  "
+                           f"branches {s.branches}, nesting {s.nesting}, "
+                           f"callers {s.callers}, callees {s.callees}")
+            if len(found) == 1:
+                s = found[0]
+                for name, p, line in g.callers(s.id, 10):
+                    typer.echo(f"  <- {name} ({p}:{line})")
+                deps = g.dependents(s.path)
+                tests = g.tests_for(s.path)
+                ch = g.churn(s.path)
+                typer.echo(f"  file dependents: {len(deps)}; tests: "
+                           f"{', '.join(t.path for t in tests[:3]) or 'none found'}"
+                           + (f"; churn {ch['commits']} commits / {ch['authors']} authors"
+                              if ch else ""))
 
 
 def _line(level: str, msg: str) -> None:
@@ -130,12 +178,32 @@ def run_doctor(root: Path) -> list[tuple[str, str]]:
                 out.append(("INFO", "no hooks configured (run `ccr init`)"))
         except (ValueError, OSError) as e:
             out.append(("FAIL", f".claude/settings.json is not valid JSON: {e}"))
-    db = root / ".ccr" / "graph.db"
-    out.append(("OK" if db.exists() else "INFO",
-                "graph database present (freshness check not implemented yet)" if db.exists()
-                else "graph not built yet (placeholder)"))
-    out.append(("INFO", "memory sources check not implemented yet"))
+    out += _doctor_graph(root)
+    out += _doctor_memory(root)
     return out
+
+
+def _doctor_graph(root: Path) -> list[tuple[str, str]]:
+    from ccr.graph import freshness
+    try:
+        f = freshness(root)
+    except Exception as e:  # never let doctor crash on a broken db
+        return [("WARN", f"graph check failed: {e}")]
+    if f["status"] == "missing":
+        return [("INFO", "graph not built yet (run `ccr graph`)")]
+    if f["status"] == "error":
+        return [("WARN", "graph database unreadable (run `ccr graph --rebuild`)")]
+    age = f.get("age_s")
+    age_s = f"{age // 60} min ago" if age is not None and age < 7200 else (
+        f"{age // 3600} h ago" if age is not None else "unknown age")
+    msg = f"graph: {f['files']} files, mode {f['mode']}, built {age_s}"
+    if f["status"] == "fresh":
+        return [("OK", msg + ", fresh")]
+    return [("WARN", msg + ", stale: " + "; ".join(f["reasons"]) + " (run `ccr graph`)")]
+
+
+def _doctor_memory(root: Path) -> list[tuple[str, str]]:
+    return [("INFO", "memory sources check not implemented yet")]
 
 
 @app.command()

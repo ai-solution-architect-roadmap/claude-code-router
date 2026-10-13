@@ -5,5 +5,5 @@ __pycache__/
 .pytest_cache/
 dist/
 build/
-.ccr/graph.db
+.ccr/graph.db*
 .ccr/local/

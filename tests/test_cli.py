@@ -38,7 +38,7 @@ def test_doctor_hooks_wired(tmp_path):
     assert "ccr hooks wired" in r.output
 
 
-@pytest.mark.parametrize("cmd", [["init"], ["explain"], ["run"], ["stats"], ["feedback"], ["graph", "build"]])
+@pytest.mark.parametrize("cmd", [["init"], ["explain"], ["run"], ["stats"], ["feedback"]])
 def test_stubs(cmd):
     r = runner.invoke(app, cmd)
     assert r.exit_code == 0 and "not implemented yet" in r.output
