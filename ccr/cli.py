@@ -52,9 +52,57 @@ def profile(path: Path = typer.Argument(Path("."), help="Project root")) -> None
 
 
 @app.command()
-def explain(task: Optional[str] = typer.Argument(None)) -> None:
-    """Explain the routing decision for a task."""
-    _stub("explain")
+def explain(task: str = typer.Argument(..., help="The task prompt to evaluate"),
+            llm: bool = typer.Option(False, "--llm", help="Ask haiku (your claude CLI) when "
+                                                         "rule confidence is low"),
+            as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+            path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Show the tier decision, scores, touched files and reasoning. Runs nothing."""
+    from ccr.route import decide
+    d = decide(task, path.resolve(), allow_llm=llm)
+    if as_json:
+        typer.echo(json.dumps(d.to_dict(), indent=2))
+        return
+    for line in format_decision(task, d):
+        typer.echo(line)
+
+
+def format_decision(task: str, d) -> list[str]:
+    from ccr.evaluate.risk import COMPONENTS, LABELS
+    tc, loc, r, b = d.task_class, d.location, d.risk, d.budget
+    short = " ".join(task.split())
+    out = [f"Task:      {short if len(short) <= 100 else short[:97] + '...'}",
+           f"Tier:      {d.tier.name}  {d.tier.model} / {d.tier.effort}  (agent {d.tier.agent})"
+           + ("   [T4 rule]" if d.t4_rules else ""),
+           f"Class:     {tc.kind} ({tc.source}, class confidence {tc.confidence:.2f}"
+           + (f", runner-up {tc.secondary}" if tc.secondary else "") + f")  scope {tc.scope}"
+           + f", vagueness {tc.vagueness:.2f}"
+           + (f", destructive: {', '.join(tc.destructive[:3])}" if tc.destructive else ""),
+           f"Confidence: {d.confidence:.2f} overall"]
+    named = len(loc.explicit)
+    out.append(f"Files:     {len(loc.candidates)} candidate(s), location confidence "
+               f"{loc.confidence:.2f}; {named} named/@-mentioned, {len(loc.symbols)} symbol(s)"
+               + ("" if loc.graph else "  [no code graph]"))
+    for c in loc.candidates[:6]:
+        out.append(f"           {c.confidence:.2f}  {c.path}  ({'; '.join(c.reasons[:3])})")
+    if len(loc.candidates) > 6:
+        out.append(f"           ... {len(loc.candidates) - 6} more")
+    if r.score is None:
+        out.append("Risk:      unknown (nothing located)")
+    else:
+        out.append(f"Risk:      {r.score:.2f} {r.level}  (code-only {r.code_risk:.2f})")
+    for n in COMPONENTS:
+        c = r.components[n]
+        out.append(f"           {LABELS[n]:<15} {c.value:.2f}  {c.detail}")
+    out.append(f"Budget:    {b.detail}" + ("  -> pressure" if b.pressure else ""))
+    out.append(f"History:   {d.history}")
+    out.append(f"LLM:       {d.llm}")
+    out.append("Reasoning:")
+    out += [f"  - {x}" for x in d.reasons]
+    for n in d.notes:
+        out.append(f"Note:      {n}")
+    out.append(f"(evaluated in {d.elapsed_ms:.0f} ms; explain runs nothing)")
+    return out
 
 
 @app.command()
@@ -178,8 +226,24 @@ def run_doctor(root: Path) -> list[tuple[str, str]]:
                 out.append(("INFO", "no hooks configured (run `ccr init`)"))
         except (ValueError, OSError) as e:
             out.append(("FAIL", f".claude/settings.json is not valid JSON: {e}"))
+    out += _doctor_config(root)
     out += _doctor_graph(root)
     out += _doctor_memory(root)
+    return out
+
+
+def _doctor_config(root: Path) -> list[tuple[str, str]]:
+    from ccr.config import config_path, load_config
+    cfg = load_config(root)
+    if cfg.path is None:
+        return [("INFO", f"{config_path(root).relative_to(root)} not present (built-in tier "
+                         f"defaults)")]
+    out = [("WARN", f"config: {e}") for e in cfg.errors]
+    out += [("INFO", f"config: {w}") for w in cfg.warnings]
+    if not cfg.errors:
+        t = cfg.tiers
+        out.insert(0, ("OK", "config valid; tiers " + ", ".join(
+            f"{k} {v.model}/{v.effort}" for k, v in t.items())))
     return out
 
 

@@ -38,7 +38,7 @@ def test_doctor_hooks_wired(tmp_path):
     assert "ccr hooks wired" in r.output
 
 
-@pytest.mark.parametrize("cmd", [["init"], ["explain"], ["run"], ["stats"], ["feedback"]])
+@pytest.mark.parametrize("cmd", [["init"], ["run"], ["stats"], ["feedback"]])
 def test_stubs(cmd):
     r = runner.invoke(app, cmd)
     assert r.exit_code == 0 and "not implemented yet" in r.output
@@ -48,3 +48,13 @@ def test_profile(tmp_path):
     (tmp_path / "a.zig").write_text("x")
     r = runner.invoke(app, ["profile", str(tmp_path)])
     assert r.exit_code == 0 and "Zig (1)" in r.output
+
+
+def test_doctor_reports_config(tmp_path):
+    (tmp_path / ".ccr").mkdir()
+    (tmp_path / ".ccr" / "config.yaml").write_text("tiers:\n  T4: {effort: max}\n")
+    r = runner.invoke(app, ["doctor", "--path", str(tmp_path)])
+    assert "config: tiers.T4.effort" in r.output
+    (tmp_path / ".ccr" / "config.yaml").write_text("tiers:\n  T4: {model: fable}\n")
+    r = runner.invoke(app, ["doctor", "--path", str(tmp_path)])
+    assert "config valid; tiers T0 haiku/low" in r.output and "T4 fable/xhigh" in r.output

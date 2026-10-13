@@ -60,6 +60,7 @@ class Context:
     root: Path
     home: Path
     environ: Mapping[str, str]
+    _project_paths: list[str] | None = field(default=None, repr=False)
 
     @property
     def config_dir(self) -> Path:
@@ -241,6 +242,14 @@ def _norm(s: str) -> str:
 
 
 def _project_paths(ctx: Context) -> list[str]:
+    """Spellings of the project path (resolved root, git top level, $PWD). Memoized on the
+    context: each git call costs a subprocess."""
+    if ctx._project_paths is None:
+        ctx._project_paths = _compute_project_paths(ctx)
+    return ctx._project_paths
+
+
+def _compute_project_paths(ctx: Context) -> list[str]:
     cands = [str(ctx.root)]
     try:
         from ccr.graph import git as ggit
