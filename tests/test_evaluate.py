@@ -323,3 +323,32 @@ def test_decide_is_fast(route_env):
             decide("Refactor Engine.run into smaller functions", root, graph=g, memory=mem,
                    history_records=[])
     assert (time.perf_counter() - t) / 5 < 0.25
+
+
+# ----------------------------------------------------------------------------- "session" term
+@pytest.mark.parametrize("text,hit", [
+    ("Summarise what we changed in this session", None),
+    ("Earlier in the session you renamed the helper; also add a docstring", None),
+    ("Start a new session and fix the off-by-one in paginate()", None),
+    ("Rotate the session token on login", "session token"),
+    ("Prevent session fixation in the login flow", "session fixation"),
+    ("Guard against session hijacking", "session hijack"),
+    ("Set the Secure flag on session cookies", "session cookies"),
+    ("Rotate this session token after a password change", "session token"),
+])
+def test_session_critical_term_needs_a_security_sense(text, hit):
+    from ccr.config import default_config
+    from ccr.evaluate.risk import prompt_critical_terms
+    terms = [t for g, t in prompt_critical_terms(text, default_config()["critical_terms"])
+             if g == "auth" and t.startswith("session")]
+    assert terms == ([hit] if hit else [])
+
+
+def test_in_this_session_does_not_put_a_task_on_the_auth_path(route_env):
+    root, memory = route_env["shop_py"]
+    with Graph.open(root) as g:
+        d = decide("In this session, fix the off-by-one error in paginate() in "
+                   "app/api/pagination.py", root, cfg=default_config(), graph=g,
+                   memory=memory, history_records=[], now=0)
+    assert d.risk.critical_terms == [] and "auth" not in d.risk.critical_groups
+    assert d.tier.name == "T1"

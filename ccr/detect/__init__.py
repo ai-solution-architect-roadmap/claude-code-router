@@ -1,7 +1,6 @@
 """Repository detection: languages, frameworks, size, suggested defaults."""
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass, field

@@ -53,9 +53,13 @@ DEFAULTS: dict = {
     # Prompt words/phrases that put a task on a critical path even before files are located.
     # Matched as whole words (simple plurals included), case-insensitive.
     "critical_terms": {
-        "auth": ["auth", "authentication", "authorization", "login", "logout", "session",
-                 "oauth", "jwt", "sso", "saml", "permission", "rbac", "password",
-                 "credential"],
+        # bare "session" is ordinary wording ("in this session"); only security senses count
+        "auth": ["auth", "authentication", "authorization", "login", "logout",
+                 "session token", "session cookie", "session cookies", "session id", "session key",
+                 "session secret", "session fixation", "session hijack",
+                 "session management", "session expiry", "session expiration",
+                 "session invalidation", "oauth", "jwt", "sso", "saml", "permission", "rbac",
+                 "password", "credential"],
         "payments": ["payment", "billing", "invoice", "checkout", "refund", "stripe", "ledger",
                      "charge", "subscription", "payout"],
         "migrations": ["migration", "alembic", "schema change", "schema migration",

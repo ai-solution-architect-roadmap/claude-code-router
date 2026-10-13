@@ -7,3 +7,8 @@ dist/
 build/
 .ccr/graph.db*
 .ccr/local/
+
+# this repo's own ccr state (graph, history, local caches); in target projects
+# .ccr/config.yaml and .ccr/history.jsonl are committed instead
+.ccr/
+.ruff_cache/

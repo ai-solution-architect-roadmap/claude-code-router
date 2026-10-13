@@ -50,9 +50,21 @@ returns returned page help okay ok hey hi thanks thank
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
+# "in this session", "earlier in the session": the Claude Code conversation, not an auth
+# session. Kept when a security noun follows ("this session token").
+CONVERSATION_RX = re.compile(
+    r"\b(?:(?:this|that|current|same|previous|last|whole|entire|prior)\s+"
+    r"(?:(?:claude|chat|coding|work)\s+)?session"
+    r"|(?:earlier|later|before)\s+in\s+(?:the|this)\s+session)\b"
+    r"(?!\s+(?:tokens?|cookies?|ids?|keys?|secrets?|fixation|hijack\w*|management|expir\w*|"
+    r"invalidation|store|storage|data|handling|validation|timeouts?))", re.I)
+
+
 def strip_refs(text: str) -> str:
-    """Text with URLs, @mentions, paths, backticks and quoted strings blanked out."""
-    t = URL_RX.sub(" ", text)
+    """Text with URLs, @mentions, paths, backticks, quoted strings and conversational
+    "this session" references blanked out."""
+    t = CONVERSATION_RX.sub(" ", text)
+    t = URL_RX.sub(" ", t)
     t = TICK_RX.sub(" ", t)
     t = QUOTED_RX.sub(" ", t)
     t = AT_RX.sub(" ", t)

@@ -305,3 +305,13 @@ def test_hook_retry_records_escalated_to(hook_proj):
     (r,) = H.read(hook_proj)
     assert r["outcome"] == "failure" and r["escalated_to"] == f"T{int(tier[1]) + 1}"
     assert compute(H.read(hook_proj), default_config())["tiers"][tier]["escalated"] == 1
+
+
+def test_doctor_reports_history_health(tmp_path):
+    a = rec(ts=1)
+    write_lines(H.history_path(tmp_path), [a, a, "<<<<<<< HEAD", H.feedback_record(a["id"],
+                                                                                   "bad")])
+    from ccr.cli import _doctor_history
+    (msg,) = [m for _, m in _doctor_history(tmp_path)]
+    assert msg == ("history: 1 task(s), 1 feedback record(s), 1 duplicate line(s) ignored, "
+                   "1 unreadable line(s) skipped")

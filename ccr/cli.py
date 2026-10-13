@@ -441,6 +441,37 @@ def run_doctor(root: Path) -> list[tuple[str, str]]:
     out += _doctor_config(root)
     out += _doctor_graph(root)
     out += _doctor_memory(root)
+    out += _doctor_history(root)
+    return out
+
+
+def _doctor_history(root: Path) -> list[tuple[str, str]]:
+    from ccr import history as H
+    p = H.history_path(root)
+    if not p.exists():
+        return [("INFO", ".ccr/history.jsonl not present (created by `ccr init`)")]
+    try:
+        lines = [ln for ln in p.read_text(encoding="utf-8", errors="replace").splitlines()
+                 if ln.strip()]
+    except OSError as e:
+        return [("WARN", f"history unreadable: {e}")]
+    raw = H.read_raw(root)
+    tasks = H.resolve(raw)
+    fb = sum(1 for r in raw if r.get("type") == "feedback")
+    bad = len(lines) - len(raw)
+    dup = len(raw) - fb - len(tasks)
+    msg = (f"history: {len(tasks)} task(s), {fb} feedback record(s)"
+           + (f", {dup} duplicate line(s) ignored" if dup > 0 else "")
+           + (f", {bad} unreadable line(s) skipped" if bad else ""))
+    out = [("OK" if not bad else "INFO", msg)]
+    ga = root / ".gitattributes"
+    try:
+        has_union = "history.jsonl merge=union" in ga.read_text(encoding="utf-8")
+    except OSError:
+        has_union = False
+    if (root / ".git").exists() and not has_union:
+        out.append(("INFO", "no `.ccr/history.jsonl merge=union` in .gitattributes: parallel "
+                            "branches may conflict on history (rerun `ccr init`)"))
     return out
 
 
