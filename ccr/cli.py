@@ -202,8 +202,41 @@ def _doctor_graph(root: Path) -> list[tuple[str, str]]:
     return [("WARN", msg + ", stale: " + "; ".join(f["reasons"]) + " (run `ccr graph`)")]
 
 
+_MEM_LABELS = {"claude_md": "CLAUDE.md", "claude_local": "CLAUDE.local.md", "rules": "rules",
+               "import": "@imports", "auto_memory": "auto memory", "agent_memory": "agent memory",
+               "mcp_memory": "MCP memory"}
+
+
 def _doctor_memory(root: Path) -> list[tuple[str, str]]:
-    return [("INFO", "memory sources check not implemented yet")]
+    from ccr.memory import collect
+    try:
+        rep = collect(root)
+    except Exception as e:  # collect never raises, but doctor must not either
+        return [("WARN", f"memory check failed: {e}")]
+    out: list[tuple[str, str]] = []
+    if not rep.sources:
+        out.append(("INFO", "no memory sources found (CLAUDE.md, auto memory, agent memory, "
+                            "MCP memory)"))
+    else:
+        groups: dict[str, list] = {}
+        for s in rep.sources:
+            groups.setdefault(s.kind, []).append(s)
+        parts = []
+        for kind, items in groups.items():
+            label = _MEM_LABELS.get(kind, kind)
+            if kind == "agent_memory":
+                parts.append(f"{label} ({len({i.agent for i in items})} agent(s))")
+            elif kind == "mcp_memory":
+                parts.append(f"{label} ({sum(i.entries for i in items)} entries)")
+            else:
+                scopes = sorted({i.scope for i in items})
+                parts.append(f"{label} x{len(items)} ({', '.join(scopes)})")
+        out.append(("OK", f"memory: {len(rep.sources)} source(s): " + "; ".join(parts)))
+        kinds = rep.by_kind()
+        out.append(("INFO", f"memory signals: {len(rep.signals)}" + (
+            " (" + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) + ")" if kinds else "")))
+    out += [("INFO", n) for n in rep.notes]
+    return out
 
 
 @app.command()
