@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = ["typer>=0.12", "pyyaml>=6", "tree-sitter-language-pack>=0.2"]
 
 [project.scripts]
-ccr = "ccr.cli:app"
+ccr = "ccr.entry:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

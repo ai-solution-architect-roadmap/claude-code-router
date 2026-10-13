@@ -31,17 +31,7 @@ def _stub(name: str) -> None:
     typer.echo(f"ccr {name}: not implemented yet")
 
 
-@app.command()
-def init() -> None:
-    """Install ccr config into the project."""
-    _stub("init")
-
-
-@app.command()
-def profile(path: Path = typer.Argument(Path("."), help="Project root")) -> None:
-    """Print the detected project profile."""
-    from ccr.detect import detect
-    p = detect(path)
+def _print_profile(p) -> None:
     typer.echo(f"Root:       {p.root}")
     langs = ", ".join(f"{k} ({v})" for k, v in p.languages.items()) or "none detected"
     typer.echo(f"Languages:  {langs}")
@@ -49,6 +39,104 @@ def profile(path: Path = typer.Argument(Path("."), help="Project root")) -> None
     typer.echo(f"Files:      {p.file_count}")
     typer.echo(f"LOC:        {p.total_loc}")
     typer.echo(f"Suggested default: {p.suggested_model} / {p.suggested_effort}")
+
+
+def _show_plan(plan, dry_run: bool) -> None:
+    for n in plan.notes:
+        typer.echo(f"  - {n}")
+    for w in plan.warnings:
+        typer.echo(f"  ! {w}")
+    if not plan.changes:
+        typer.echo("Nothing to change (already up to date).")
+        return
+    if dry_run:
+        typer.echo(f"Dry run: {len(plan.changes)} file(s) would change; nothing written.\n")
+        typer.echo(plan.diff(), nl=False)
+    else:
+        for c in plan.changes:
+            typer.echo(f"  {c.action:<6} {c.rel}")
+
+
+@app.command()
+def init(dry_run: bool = typer.Option(False, "--dry-run", help="Print the exact diff; "
+                                                                "write nothing"),
+         force: bool = typer.Option(False, "--force", help="Override your model/effortLevel "
+                                    "and regenerate edited ccr agent files (with backups)"),
+         local: bool = typer.Option(False, "--local", help="Write settings to "
+                                    ".claude/settings.local.json (personal, uncommitted)"),
+         no_statusline: bool = typer.Option(False, "--no-statusline",
+                                            help="Do not install the status line relay"),
+         no_graph: bool = typer.Option(False, "--no-graph", help="Skip building the graph"),
+         command: Optional[str] = typer.Option(None, "--command", help="Command prefix hooks "
+                                               "use to run ccr (default: auto-detect)"),
+         path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Install ccr into the project: settings (model, hooks, status line), agents, config.
+
+    Re-running is safe: existing user keys, hooks and edited agents are kept, and every
+    modified file is backed up to .ccr/backups/ first."""
+    from ccr.config import load_config
+    from ccr.detect import detect
+    from ccr.install import InstallError, apply, plan_init
+    from ccr.install.settings import SettingsError
+    root = path.resolve()
+    prof = detect(root)
+    typer.echo(f"ccr init ({root})")
+    langs = ", ".join(f"{k} {v}" for k, v in list(prof.languages.items())[:4]) or "no code"
+    typer.echo(f"  profile: {langs}; {prof.file_count} files, {prof.total_loc} LOC -> "
+               f"default {prof.suggested_model}/{prof.suggested_effort}")
+    if not dry_run and not no_graph:
+        from ccr.graph import update
+        try:
+            r = update(root)
+            typer.echo(f"  graph: {r.scanned} files ({'built' if r.full else 'updated'}, "
+                       f"parsed {r.parsed}) in {r.elapsed:.1f}s")
+        except Exception as e:  # graph is optional; routing degrades without it
+            typer.echo(f"  ! graph build failed ({e}); routing works without it")
+    elif dry_run and not no_graph:
+        typer.echo("  graph: would be built/updated (.ccr/graph.db, git-ignored)")
+    try:
+        plan = plan_init(root, cfg=load_config(root), profile=prof, force=force, local=local,
+                         statusline=not no_statusline, command=command)
+    except (SettingsError, InstallError) as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
+    _show_plan(plan, dry_run)
+    if dry_run or not plan.changes:
+        return
+    try:
+        bdir = apply(plan)
+    except (InstallError, OSError) as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
+    if bdir:
+        typer.echo(f"  backups in {bdir.relative_to(root)}")
+    typer.echo("Done. Start `claude` here; `ccr explain \"<task>\"` previews routing.")
+
+
+@app.command()
+def profile(path: Path = typer.Argument(Path("."), help="Project root"),
+            apply_: bool = typer.Option(False, "--apply", help="Write the suggested model/"
+                                        "effortLevel into .claude/settings.json (overrides)"),
+            dry_run: bool = typer.Option(False, "--dry-run", help="With --apply: print the "
+                                         "diff only"),
+            local: bool = typer.Option(False, "--local", help="With --apply: write "
+                                       ".claude/settings.local.json instead")) -> None:
+    """Print the detected project profile; --apply sets it as the session default."""
+    from ccr.detect import detect
+    p = detect(path)
+    _print_profile(p)
+    if not apply_:
+        return
+    from ccr.install import apply, plan_profile
+    from ccr.install.settings import SettingsError
+    try:
+        plan = plan_profile(path, p, local=local)
+    except SettingsError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
+    _show_plan(plan, dry_run)
+    if plan.changes and not dry_run:
+        apply(plan)
 
 
 @app.command()
@@ -318,6 +406,22 @@ def doctor(verbose: bool = typer.Option(False, "--verbose", help="Log details to
     warns = sum(1 for lv, _ in results if lv == "WARN")
     typer.echo(f"{fails} problem(s), {warns} warning(s)")
     raise typer.Exit(1 if fails else 0)
+
+
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def hook(ctx: typer.Context,
+         name: str = typer.Argument(..., help="session-start | prompt | stop")) -> None:
+    """Claude Code hook entry (reads hook JSON on stdin; always exits 0)."""
+    from ccr.hooks import main as hook_main
+    raise typer.Exit(hook_main([name, *ctx.args]))
+
+
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def statusline(ctx: typer.Context) -> None:
+    """Status line relay: records model/effort/rate limits, prints a short line.
+    `--wrap "<cmd>"` runs your own status line command and prints its output instead."""
+    from ccr.statusline import main as sl_main
+    raise typer.Exit(sl_main(list(ctx.args)))
 
 
 if __name__ == "__main__":

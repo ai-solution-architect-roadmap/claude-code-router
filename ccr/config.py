@@ -99,6 +99,14 @@ DEFAULTS: dict = {
         "max_escalation": 1,         # tiers above the class base without a T4 rule
         "ceiling_without_critical": "T3",
     },
+    # Claude Code hooks installed by `ccr init`. All hooks fail open (silent, exit 0).
+    "hooks": {
+        "enabled": True,             # master switch for every ccr hook
+        "route_prompts": True,       # UserPromptSubmit: inject the routing line
+        "model_advice": True,        # suggest `/model <x>` for iterative work above the main model
+        "background_graph": True,    # SessionStart: refresh a stale graph in the background
+        "watchdog_ms": 1500,         # hard internal deadline per hook run
+    },
 }
 
 
@@ -330,6 +338,22 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
                 cfg.warnings.append(f"routing.{k}: unknown field ignored")
     elif routing is not None:
         cfg.errors.append("routing: expected a mapping")
+
+    hooks = raw.get("hooks")
+    if isinstance(hooks, dict):
+        for k, v in hooks.items():
+            if k == "watchdog_ms":
+                if _num(cfg, "hooks.watchdog_ms", v, 100, 60_000):
+                    d["hooks"][k] = int(v)
+            elif k in DEFAULTS["hooks"]:
+                if isinstance(v, bool):
+                    d["hooks"][k] = v
+                else:
+                    cfg.errors.append(f"hooks.{k}: expected true or false, got {v!r}")
+            else:
+                cfg.warnings.append(f"hooks.{k}: unknown field ignored")
+    elif hooks is not None:
+        cfg.errors.append("hooks: expected a mapping")
 
 
 def _section(cfg: Config, raw: dict, name: str, ranges: dict[str, tuple[float, float]],
