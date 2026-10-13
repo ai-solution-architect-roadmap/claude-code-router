@@ -27,10 +27,6 @@ def _setup_logging(root: Path, verbose: bool) -> None:
     typer.echo(f"verbose: logging to {d / 'ccr.log'}")
 
 
-def _stub(name: str) -> None:
-    typer.echo(f"ccr {name}: not implemented yet")
-
-
 def _print_profile(p) -> None:
     typer.echo(f"Root:       {p.root}")
     langs = ", ".join(f"{k} ({v})" for k, v in p.languages.items()) or "none detected"
@@ -183,7 +179,7 @@ def format_decision(task: str, d) -> list[str]:
         c = r.components[n]
         out.append(f"           {LABELS[n]:<15} {c.value:.2f}  {c.detail}")
     out.append(f"Budget:    {b.detail}" + ("  -> pressure" if b.pressure else ""))
-    out.append(f"History:   {d.history}")
+    out.append(f"Learning:  {d.history}")
     out.append(f"LLM:       {d.llm}")
     out.append("Reasoning:")
     out += [f"  - {x}" for x in d.reasons]
@@ -194,21 +190,149 @@ def format_decision(task: str, d) -> list[str]:
 
 
 @app.command()
-def run(task: Optional[str] = typer.Argument(None)) -> None:
-    """Run a task headlessly with routing."""
-    _stub("run")
+def run(task: Optional[str] = typer.Argument(None, help="The task; `-` or omitted reads "
+                                             "stdin"),
+        tier: Optional[str] = typer.Option(None, "--tier", help="Start at this tier "
+                                           "(T0..T4) instead of the routed one"),
+        max_turns: Optional[int] = typer.Option(None, "--max-turns", min=1,
+                                                help="Turn cap per attempt (default "
+                                                     "run.max_turns)"),
+        max_budget_usd: Optional[float] = typer.Option(
+            None, "--max-budget-usd", min=0.001, help="Spend cap for the whole run, all "
+            "attempts (claude's own client-side estimate)"),
+        max_escalations: Optional[int] = typer.Option(None, "--max-escalations", min=0,
+                                                      max=4, help="Default "
+                                                      "run.max_escalations (1)"),
+        test_command: Optional[str] = typer.Option(None, "--test-command",
+                                                   help="Shell command that must pass "
+                                                        "(default run.test_command)"),
+        no_test: bool = typer.Option(False, "--no-test", help="Skip the test command"),
+        permission_mode: Optional[str] = typer.Option(None, "--permission-mode",
+                                                      help="Passed to claude (e.g. "
+                                                           "acceptEdits)"),
+        no_llm: bool = typer.Option(False, "--no-llm", help="Rules only: never ask haiku "
+                                                           "to help classify"),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Show the routing and the "
+                                                             "command; run nothing"),
+        as_json: bool = typer.Option(False, "--json", help="Print a JSON summary instead "
+                                                          "of the result text"),
+        path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Run a task headlessly with routing and one-tier escalation.
+
+    Routes the task, runs your `claude -p` at that tier's model/effort, escalates one tier
+    on failure and logs every attempt to .ccr/history.jsonl (no prompt text)."""
+    import sys
+
+    from ccr.config import TIERS, load_config
+    from ccr.headless import build_argv, find_claude, run_task
+    from ccr.route import decide
+    root = path.resolve()
+    if task is None or task == "-":
+        task = sys.stdin.read()
+    if not task or not task.strip():
+        typer.echo("error: empty task", err=True)
+        raise typer.Exit(2)
+    if tier is not None:
+        tier = tier.upper()
+        if tier not in TIERS:
+            typer.echo(f"error: --tier must be one of {', '.join(TIERS)}", err=True)
+            raise typer.Exit(2)
+    cfg = load_config(root)
+
+    def say(msg: str) -> None:
+        typer.echo(f"ccr: {msg}", err=True)
+
+    d = decide(task, root, cfg=cfg, allow_llm=not no_llm)
+    t = cfg.tier(tier) if tier else d.tier
+    say(f"routed {d.tier.name} ({d.tier.model}/{d.tier.effort}) for {d.task_class.kind} in "
+        f"{d.area}, confidence {d.confidence:.2f}" + (f"; starting at {t.name} (--tier)"
+                                                       if tier else ""))
+    say(f"learning: {d.history}")
+    if d.llm_used:
+        say(f"LLM: {d.llm}")
+    if dry_run:
+        exe = find_claude(dict(os.environ)) or "claude"
+        rc = cfg["run"]
+        argv = build_argv(exe, t, max_turns=max_turns or rc["max_turns"],
+                          max_budget_usd=max_budget_usd if max_budget_usd is not None
+                          else rc["max_budget_usd"],
+                          permission_mode=permission_mode or rc["permission_mode"])
+        typer.echo("would run: " + " ".join(argv) + "  < task on stdin")
+        tc = test_command or rc["test_command"]
+        esc = rc["max_escalations"] if max_escalations is None else max_escalations
+        typer.echo(f"test command: {tc if tc and not no_test else 'none'}; "
+                   f"max escalations: {esc}")
+        return
+    res = run_task(task, root, cfg=cfg, tier=tier, max_turns=max_turns,
+                   max_budget_usd=max_budget_usd, max_escalations=max_escalations,
+                   test_command=test_command, use_tests=not no_test,
+                   permission_mode=permission_mode, decision=d, echo=say)
+    last = res.attempts[-1] if res.attempts else None
+    if as_json:
+        typer.echo(json.dumps(res.to_dict(), indent=2))
+    elif last is not None and last.result:
+        typer.echo(last.result)
+    tiers = " -> ".join(f"{a.tier} {a.outcome}" for a in res.attempts)
+    say(f"{'success' if res.success else 'failed'}: {tiers}; {res.tokens} tokens, "
+        f"${res.cost_usd:.4f}" + (f"; stopped: {res.stopped}" if res.stopped and
+                                  not res.success else "")
+        + (f"; resume with `claude --resume {last.session}`" if last and last.session
+           else ""))
+    if last is not None and last.outcome == "error":
+        raise typer.Exit(2)
+    raise typer.Exit(0 if res.success else 1)
 
 
 @app.command()
-def stats() -> None:
-    """Show routing statistics."""
-    _stub("stats")
+def stats(as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+          days: Optional[float] = typer.Option(None, "--days", min=0.01,
+                                               help="Only the last N days"),
+          path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Show usage, tier distribution, success and escalation rates.
+
+    Per tier, area and task class, plus what the learning loop does with the history."""
+    from ccr import history as H
+    from ccr.config import load_config
+    from ccr.history.stats import compute, format_text
+    root = path.resolve()
+    cfg = load_config(root)
+    s = compute(H.read(root, window_days=days), cfg)
+    if as_json:
+        typer.echo(json.dumps(s, indent=2))
+        return
+    for line in format_text(s, root):
+        typer.echo(line)
 
 
 @app.command()
-def feedback(verdict: Optional[str] = typer.Argument(None)) -> None:
-    """Record feedback on the last routing decision."""
-    _stub("feedback")
+def feedback(verdict: Optional[str] = typer.Argument(None, help="good | bad (omit to show "
+                                                     "the last task)"),
+             last: bool = typer.Option(True, "--last", help="Target the most recent routed "
+                                       "task (the default)"),
+             ref: Optional[str] = typer.Option(None, "--id", help="Target a task by id "
+                                               "(prefix) instead"),
+             path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Mark the last routed task good or bad.
+
+    Works for interactive (hook) tasks, including one still in progress, and `ccr run`
+    attempts. Appends a correction record; history is never rewritten."""
+    from ccr.history import feedback as F
+    root = path.resolve()
+    if verdict is None:
+        t = F.find(root, ref)
+        typer.echo(F.describe(t) if t else "no routed task found")
+        raise typer.Exit(0 if t else 1)
+    verdict = verdict.lower()
+    if verdict not in ("good", "bad"):
+        typer.echo("error: verdict must be good or bad", err=True)
+        raise typer.Exit(2)
+    t, _ = F.mark(root, verdict, ref)
+    if t is None:
+        typer.echo("no matching routed task found" + (f" for id {ref!r}" if ref else ""),
+                   err=True)
+        raise typer.Exit(1)
+    typer.echo(f"marked {verdict} ({'success' if verdict == 'good' else 'failure'}): "
+               f"{F.describe(t)}")
 
 
 @app.command()

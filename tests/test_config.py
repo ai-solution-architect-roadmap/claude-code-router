@@ -130,3 +130,35 @@ def test_config_errors_surface_in_decision_notes(tmp_path):
     d = decide("What is this?", tmp_path, graph=None, memory=None, history_records=[])
     assert d.tier.effort == "low"
     assert any(n.startswith("config: tiers.T0.effort") for n in d.notes)
+
+
+def test_run_and_learning_sections(tmp_path):
+    from ccr.config import load_config
+    p = tmp_path / ".ccr" / "config.yaml"
+    p.parent.mkdir(parents=True)
+    p.write_text("run:\n  test_command: 'pytest -q'\n  max_escalations: 2\n"
+                 "  max_budget_usd: 1.5\n  permission_mode: acceptEdits\n"
+                 "history:\n  explore_down: false\n  min_samples: 5\n")
+    cfg = load_config(tmp_path)
+    assert not cfg.errors, cfg.errors
+    assert cfg["run"]["test_command"] == "pytest -q" and cfg["run"]["max_escalations"] == 2
+    assert cfg["run"]["max_budget_usd"] == 1.5 and cfg["run"]["permission_mode"] == "acceptEdits"
+    assert cfg["history"]["explore_down"] is False and cfg["history"]["min_samples"] == 5
+    p.write_text("run:\n  test_command: 3\n  max_escalations: 9\n  bogus: 1\n"
+                 "history:\n  explore_down: maybe\n")
+    cfg = load_config(tmp_path)
+    assert any("run.test_command" in e for e in cfg.errors)
+    assert any("run.max_escalations" in e for e in cfg.errors)
+    assert any("history.explore_down" in e for e in cfg.errors)
+    assert cfg["run"]["max_escalations"] == 1 and cfg["history"]["explore_down"] is True
+    assert any("run.bogus" in w for w in cfg.warnings)
+
+
+def test_config_template_parses_with_run_section(tmp_path):
+    from ccr.config import default_config, load_config
+    from ccr.install import config_template
+    p = tmp_path / ".ccr" / "config.yaml"
+    p.parent.mkdir(parents=True)
+    p.write_text(config_template(default_config()))
+    cfg = load_config(tmp_path)
+    assert not cfg.errors and not cfg.warnings and cfg["run"]["test_command"] is None

@@ -186,6 +186,8 @@ def run(data: dict, root, cfg) -> str | None:
                 except OSError:
                     session["offset"] = 0
         if pending is not None:          # absorbs the transcript tail, then records it
+            if retry and escalated_from in TIERS and tier.index > TIERS.index(escalated_from):
+                pending["escalated_to"] = tier.name
             finalize(root, sid, session, "failure" if retry else "success")
         start(session, {
             "ts": int(time.time()), "class": kind, "area": area, "tier": tier.name,

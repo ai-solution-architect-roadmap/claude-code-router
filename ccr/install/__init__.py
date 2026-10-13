@@ -10,6 +10,8 @@ Files managed:
   .ccr/config.yaml             created once, never overwritten
   .ccr/history.jsonl           created empty
   .gitignore                   .ccr/graph.db*, .ccr/local/, .ccr/backups/
+  .gitattributes               `.ccr/history.jsonl merge=union`: branches merge by
+                               concatenation; duplicates are dropped when history is read
 Backups of every modified file go to .ccr/backups/<timestamp>/<path>.
 """
 from __future__ import annotations
@@ -27,6 +29,7 @@ from ccr.install.command import HookCommand, detect_command, is_ours, our_subcom
 
 GITIGNORE_LINES = (".ccr/graph.db*", ".ccr/local/", ".ccr/backups/")
 GITIGNORE_HEADER = "# ccr (local caches, never commit)"
+GITATTRIBUTES_LINE = ".ccr/history.jsonl merge=union"
 MAX_BACKUP_SETS = 20
 
 
@@ -122,7 +125,11 @@ def config_template(cfg) -> str:
               f"  route_prompts: {str(h['route_prompts']).lower()}    # inject the routing line "
               f"on each prompt (opt out per prompt with !noroute)",
               f"  model_advice: {str(h['model_advice']).lower()}     # suggest /model for "
-              f"iterative work above the main model", ""]
+              f"iterative work above the main model", "",
+              "# Headless `ccr run`: success also requires this command to pass.",
+              "run:",
+              "  test_command: null      # e.g. \"pytest -q\" or \"npm test --silent\"",
+              "  max_escalations: 1      # one tier up after a failed attempt", ""]
     return "\n".join(lines)
 
 
@@ -142,6 +149,20 @@ def _gitignore(root: Path, plan: Plan, extra: tuple[str, ...] = ()) -> None:
         new += GITIGNORE_HEADER + "\n"
     new += "\n".join(missing) + "\n"
     plan.add(".gitignore", old, new, "ignore " + ", ".join(missing))
+
+
+def _gitattributes(root: Path, plan: Plan) -> None:
+    p = root / ".gitattributes"
+    old = _read(p)
+    if any(ln.split()[:1] == [".ccr/history.jsonl"] or ln.split()[:1] == ["/.ccr/history.jsonl"]
+           for ln in (old or "").splitlines()):
+        return                       # the user already decided how this file merges
+    new = old or ""
+    if new and not new.endswith("\n"):
+        new += "\n"
+    new += "# ccr: append-only routing history, merged by concatenation\n" + \
+        GITATTRIBUTES_LINE + "\n"
+    plan.add(".gitattributes", old, new, "history.jsonl merges by union")
 
 
 # --------------------------------------------------------------------------- settings
@@ -292,6 +313,7 @@ def plan_init(root: str | Path, *, cfg=None, profile=None, force: bool = False,
         plan.add(".ccr/history.jsonl", None, "", "routing history")
     extra = (".claude/settings.local.json",) if wrote_local else ()
     _gitignore(root, plan, extra)
+    _gitattributes(root, plan)
     if os.environ.get("CLAUDE_CODE_EFFORT_LEVEL"):
         plan.warnings.append("CLAUDE_CODE_EFFORT_LEVEL is set: it overrides every subagent's "
                              "effort. Unset it for tier routing to work.")

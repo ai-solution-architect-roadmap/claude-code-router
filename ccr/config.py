@@ -88,6 +88,8 @@ DEFAULTS: dict = {
         "fail_rate_up": 0.5,         # >= this failure rate at the chosen tier -> +1
         "success_rate_down": 0.8,    # >= this success rate one tier lower -> -1
         "window_days": 90,
+        "explore_down": True,        # chosen tier keeps succeeding on low-risk simple
+                                     # tasks -> try one tier lower (ccr/history/learn.py)
     },
     "llm": {
         "threshold": 0.5,            # rule confidence below this may ask the LLM (if allowed)
@@ -98,6 +100,16 @@ DEFAULTS: dict = {
     "routing": {
         "max_escalation": 1,         # tiers above the class base without a T4 rule
         "ceiling_without_critical": "T3",
+    },
+    # `ccr run` (headless `claude -p`).
+    "run": {
+        "test_command": None,        # shell command that must pass for success, e.g. "pytest -q"
+        "test_timeout_s": 900,
+        "max_escalations": 1,        # tiers to climb after a failed attempt (0 = never retry)
+        "max_turns": 40,             # per attempt (--max-turns)
+        "max_budget_usd": None,      # total for the run across attempts (--max-budget-usd)
+        "timeout_s": 3600,           # wall clock per attempt
+        "permission_mode": None,     # passed as --permission-mode (e.g. acceptEdits)
     },
     # Claude Code hooks installed by `ccr init`. All hooks fail open (silent, exit 0).
     "hooks": {
@@ -302,9 +314,36 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
     _section(cfg, raw, "budget", {
         "soft_limit_pct": (0, 100), "state_max_age_hours": (0, 24 * 30),
         "weekly_token_limit": (1, 10**13)}, nullable={"weekly_token_limit"})
-    _section(cfg, raw, "history", {
+    hist = raw.get("history")
+    if isinstance(hist, dict) and "explore_down" in hist:
+        hist = dict(hist)
+        v = hist.pop("explore_down")
+        if isinstance(v, bool):
+            d["history"]["explore_down"] = v
+        else:
+            cfg.errors.append(f"history.explore_down: expected true or false, got {v!r}")
+    _section(cfg, {"history": hist}, "history", {
         "min_samples": (1, 10_000), "fail_rate_up": (0, 1), "success_rate_down": (0, 1),
         "window_days": (1, 3650)})
+    run = raw.get("run")
+    if isinstance(run, dict):
+        run = dict(run)
+        for k in ("test_command", "permission_mode"):
+            if k not in run:
+                continue
+            v = run.pop(k)
+            if v is None or isinstance(v, str) and v.strip():
+                d["run"][k] = v.strip() if isinstance(v, str) else None
+            else:
+                cfg.errors.append(f"run.{k}: expected a non-empty string or null, got {v!r}")
+        _section(cfg, {"run": run}, "run", {
+            "test_timeout_s": (1, 86_400), "max_escalations": (0, 4), "max_turns": (1, 10_000),
+            "max_budget_usd": (0.001, 100_000), "timeout_s": (10, 86_400)},
+            nullable={"max_budget_usd"})
+        if isinstance(d["run"]["max_escalations"], float):
+            d["run"]["max_escalations"] = int(d["run"]["max_escalations"])
+    elif run is not None:
+        cfg.errors.append("run: expected a mapping")
     llm = raw.get("llm")
     if isinstance(llm, dict):
         llm = dict(llm)

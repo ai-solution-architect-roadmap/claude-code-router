@@ -1,0 +1,35 @@
+{
+ "stop_reason": "end_turn",
+ "session_id": "e364cc3d-3aba-4e9e-bd7c-4c342af20561",
+ "total_cost_usd": 0.018092,
+ "usage": {
+  "input_tokens": 9,
+  "cache_creation_input_tokens": 7482,
+  "cache_read_input_tokens": 0,
+  "output_tokens": 435,
+  "service_tier": "standard"
+ },
+ "modelUsage": {
+  "claude-haiku-4-5-20251001": {
+   "inputTokens": 908,
+   "outputTokens": 444,
+   "cacheReadInputTokens": 0,
+   "cacheCreationInputTokens": 7482,
+   "webSearchRequests": 0,
+   "costUSD": 0.018092,
+   "contextWindow": 200000,
+   "maxOutputTokens": 32000,
+   "thinkingTokens": 413,
+   "canonicalModel": "claude-haiku-4-5",
+   "provider": "firstParty",
+   "costBasis": "list"
+  }
+ },
+ "terminal_reason": "completed",
+ "is_error": false,
+ "num_turns": 1,
+ "subtype": "success",
+ "result": "ok",
+ "type": "result",
+ "duration_ms": 4625
+}

@@ -33,6 +33,8 @@ def _impl(name: str):
 def _body(name: str, raw: bytes, environ, result: dict) -> tuple[str | None, object]:
     """Returns (stdout text or None, root for logging)."""
     from ccr.hooks.common import find_root, parse_stdin
+    if environ.get("CCR_INTERNAL"):
+        return None, None            # inside ccr's own `claude -p` calls (ccr run, LLM assist)
     data = parse_stdin(raw)
     if data is None:
         return None, None

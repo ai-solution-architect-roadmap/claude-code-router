@@ -58,7 +58,7 @@ def test_fresh_init_creates_everything_and_is_idempotent(env):
     p = plan(root, environ)
     rels = {c.rel for c in p.changes}
     assert rels == {".claude/settings.json", ".ccr/config.yaml", ".ccr/history.jsonl",
-                    ".gitignore", *(f".claude/agents/{s.file}" for s in A.SPECS)}
+                    ".gitignore", ".gitattributes", *(f".claude/agents/{s.file}" for s in A.SPECS)}
     assert apply(p) is None            # nothing pre-existed, so no backups
     s = settings(root)
     assert s["model"] == "haiku" and s["effortLevel"] == "low"
@@ -70,6 +70,7 @@ def test_fresh_init_creates_everything_and_is_idempotent(env):
     assert (root / ".ccr" / "history.jsonl").read_text() == ""
     gi = (root / ".gitignore").read_text()
     assert ".ccr/graph.db*" in gi and ".ccr/local/" in gi and ".ccr/backups/" in gi
+    assert ".ccr/history.jsonl merge=union" in (root / ".gitattributes").read_text()
     before = snapshot(root)
     again = plan(root, environ)
     assert again.changes == []
@@ -348,3 +349,16 @@ def test_find_on_path_rejects_foreign_ccr(tmp_path):
     assert find_on_path({"PATH": f"{mine}:{foreign}"}) == str(mine / "ccr")
     # a foreign ccr earlier on PATH shadows ours in a shell, so bare `ccr` is unusable
     assert find_on_path({"PATH": f"{foreign}:{mine}"}) is None
+
+
+def test_gitattributes_appended_or_respected(env):
+    root, environ = env
+    (root / ".gitattributes").write_text("*.png binary")
+    apply(plan(root, environ))
+    ga = (root / ".gitattributes").read_text()
+    assert ga.startswith("*.png binary\n") and ga.endswith(".ccr/history.jsonl merge=union\n")
+    other = root.parent / "other"
+    other.mkdir()
+    (other / ".gitattributes").write_text(".ccr/history.jsonl -merge\n")
+    p = plan(other, environ)
+    assert ".gitattributes" not in {c.rel for c in p.changes}

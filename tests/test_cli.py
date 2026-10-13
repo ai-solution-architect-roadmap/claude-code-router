@@ -38,10 +38,11 @@ def test_doctor_hooks_wired(tmp_path):
     assert "ccr hooks wired" in r.output
 
 
-@pytest.mark.parametrize("cmd", [["run"], ["stats"], ["feedback"]])
-def test_stubs(cmd):
-    r = runner.invoke(app, cmd)
-    assert r.exit_code == 0 and "not implemented yet" in r.output
+@pytest.mark.parametrize("cmd,code", [(["run", ""], 2), (["stats"], 0), (["feedback"], 1)])
+def test_phase7_commands_on_empty_project(cmd, code, tmp_path):
+    r = runner.invoke(app, [*cmd, "--path", str(tmp_path)])
+    assert r.exit_code == code and "Traceback" not in r.output
+    assert "not implemented" not in r.output
 
 
 def test_profile(tmp_path):

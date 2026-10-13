@@ -112,6 +112,7 @@ def finalize(root: Path, sid: str | None, session: dict, outcome: str | None,
         rec["signals"] = sig
     if outcome:
         rec["outcome"] = outcome
+    rec.pop("feedback", None)      # feedback lives in its own records (history.resolve)
     H.append(root, H.make_record(None, **rec))
     session["pending"] = None
     session["task"] = {}
@@ -120,6 +121,11 @@ def finalize(root: Path, sid: str | None, session: dict, outcome: str | None,
 
 
 def start(session: dict, record: dict) -> None:
+    """Make `record` the session's pending task. It gets its history id now, so
+    `ccr feedback` can reference it before the task is finalised."""
+    if not record.get("id"):
+        from ccr.history import new_id
+        record = {**record, "id": new_id()}
     session["pending"] = record
     session["task"] = {}
     session["agent_files"] = {}

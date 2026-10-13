@@ -1,0 +1,37 @@
+{
+ "stop_reason": "tool_use",
+ "session_id": "c570080e-4407-47c6-bf54-5ab12c99f214",
+ "total_cost_usd": 0.0094219,
+ "usage": {
+  "input_tokens": 0,
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "output_tokens": 0,
+  "service_tier": "standard"
+ },
+ "modelUsage": {
+  "claude-haiku-4-5-20251001": {
+   "inputTokens": 922,
+   "outputTokens": 871,
+   "cacheReadInputTokens": 7109,
+   "cacheCreationInputTokens": 1717,
+   "webSearchRequests": 0,
+   "costUSD": 0.0094219,
+   "contextWindow": 200000,
+   "maxOutputTokens": 32000,
+   "thinkingTokens": 726,
+   "canonicalModel": "claude-haiku-4-5",
+   "provider": "firstParty",
+   "costBasis": "list"
+  }
+ },
+ "terminal_reason": "budget_exhausted",
+ "is_error": true,
+ "num_turns": 1,
+ "subtype": "error_max_budget_usd",
+ "errors": [
+  "Reached maximum budget ($0.001)"
+ ],
+ "type": "result",
+ "duration_ms": 9471
+}

@@ -1,0 +1,37 @@
+{
+ "stop_reason": "tool_use",
+ "session_id": "16085482-7e56-4d2d-b58a-84f6a1470108",
+ "total_cost_usd": 0.021573000000000002,
+ "usage": {
+  "input_tokens": 9,
+  "cache_creation_input_tokens": 8828,
+  "cache_read_input_tokens": 0,
+  "output_tokens": 583,
+  "service_tier": "standard"
+ },
+ "modelUsage": {
+  "claude-haiku-4-5-20251001": {
+   "inputTokens": 922,
+   "outputTokens": 599,
+   "cacheReadInputTokens": 0,
+   "cacheCreationInputTokens": 8828,
+   "webSearchRequests": 0,
+   "costUSD": 0.021573000000000002,
+   "contextWindow": 200000,
+   "maxOutputTokens": 32000,
+   "thinkingTokens": 453,
+   "canonicalModel": "claude-haiku-4-5",
+   "provider": "firstParty",
+   "costBasis": "list"
+  }
+ },
+ "terminal_reason": "max_turns",
+ "is_error": true,
+ "num_turns": 2,
+ "subtype": "error_max_turns",
+ "errors": [
+  "Reached maximum number of turns (1)"
+ ],
+ "type": "result",
+ "duration_ms": 5177
+}

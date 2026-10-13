@@ -249,33 +249,21 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     elif risk.level in ("low", "medium") and not any(u.startswith("risk") for u in ups):
         reasons.append(f"risk {risk.level} ({risk.score:.2f})")
 
-    # history -------------------------------------------------------------------------
-    from ccr import history as H
+    # history (learning loop, ccr/history/learn.py) -------------------------------------
+    from ccr.history import learn
     area = loc.top_area()
-    hc = cfg["history"]
-    stats, hscope = H.tier_stats(records, kind, area)
-    hist_note = "no history for " + kind
-    where = f"{kind} in {area}" if hscope == "area" else f"{kind} (all areas)"
-    cur = stats.get(TIERS[tier])
-    lower = stats.get(TIERS[tier - 1]) if tier > 0 else None
     cap = min(base + max_esc, ceiling)
-    if cur and sum(cur) >= hc["min_samples"] and cur[1] / sum(cur) >= hc["fail_rate_up"]:
-        if tier < cap:
-            tier += 1
-            hist_note = f"{TIERS[tier - 1]} failed {cur[1]}/{sum(cur)} for {where}: +1"
-            reasons.append("+1: history: " + hist_note.rsplit(":", 1)[0])
-        else:
-            hist_note = (f"{TIERS[tier]} failed {cur[1]}/{sum(cur)} for {where}, "
-                         f"but escalation cap reached")
-            reasons.append("history: " + hist_note)
-    elif lower and sum(lower) >= hc["min_samples"] and \
-            lower[0] / sum(lower) >= hc["success_rate_down"]:
-        tier -= 1
-        hist_note = f"{TIERS[tier]} succeeded {lower[0]}/{sum(lower)} for {where}: -1"
-        reasons.append("-1: history: " + hist_note.rsplit(":", 1)[0])
-    elif stats:
-        hist_note = f"{where}: " + ", ".join(f"{t} {s}/{s + f} ok" for t, (s, f)
-                                             in sorted(stats.items())) + " (no change)"
+    on_critical = critical_up or bool(risk.critical)
+    low_risk_simple = (not on_critical and tc.scope != "large" and not tc.vague
+                       and not tc.hard and not risk.memory_flags
+                       and (risk.level == "low"
+                            or risk.level == "unknown" and kind not in SUBSTANTIVE))
+    learned = learn.adjust(tier, kind=kind, area=area, records=records, cfg=cfg, cap=cap,
+                           floor=1 if kind in SUBSTANTIVE else 0, critical=on_critical,
+                           low_risk_simple=low_risk_simple)
+    tier, hist_note = learned.tier, learned.note
+    if learned.reason:
+        reasons.append(learned.reason)
 
     if tier > ceiling:
         reasons.append(f"capped at {TIERS[ceiling]} (T4 needs a critical-path rule)")
