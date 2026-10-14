@@ -313,21 +313,9 @@ def _process_structure(text: str, lang: str) -> list[tuple[int, int, str, str]]:
     return out
 
 
-def ts_extract(data: bytes, lang: str):
-    """Returns (symbols, refs, branches, nesting) or None when tree-sitter is unavailable.
-
-    symbols: [kind, name, start_line, end_line, parent_idx, branches, nesting]
-    refs:    (caller_idx or -1, callee name, line, qualified 0/1)
-    """
-    entry = _ts_for(lang)
-    if entry is None:
-        return None
-    parser, tags, calls_q, bq = entry
+def _collect_captures(root, data: bytes, tags, calls_q):
+    """Definitions and call references from the tags / calls queries, by byte position."""
     from tree_sitter import QueryCursor
-    tree = parser.parse(data)
-    root = tree.root_node
-    # Positions are byte offsets, or line numbers when symbols come from the line-based
-    # process() fallback; containment logic works the same in either unit.
     defs: list[tuple[int, int, str, str, int, int]] = []  # (start, end, kind, name, sl, el)
     refs_raw: list[tuple[int, str, int, int]] = []  # (pos, name, line, qualified)
     seen: set[tuple[int, str]] = set()
@@ -355,28 +343,16 @@ def ts_extract(data: bytes, lang: str):
                             or call.child_by_field_name("object") is not None
                             or call.child_by_field_name("receiver") is not None)
                     refs_raw.append((call.start_byte, name, nm.start_point[0] + 1, int(qual)))
-    line_based = tags is None
-    if line_based:
-        try:
-            structure = _process_structure(data.decode("utf-8", "replace"), lang)
-        except Exception:
-            structure = []
-        if not structure:
-            return None  # no tags query and no structure: regex does better here
-        defs = [(sl, el + 1, kind, name, sl, el) for sl, el, kind, name in structure]
-        refs_raw = [(line, name, line, q) for _, name, line, q in refs_raw]
+    return defs, refs_raw
 
-    def pos(n) -> int:
-        return n.start_point[0] + 1 if line_based else n.start_byte
 
-    def end(n) -> int:
-        return n.end_point[0] + 2 if line_based else n.end_byte
-
-    # complexity: decision points and control-structure nesting
-    nests: list[tuple[int, int]] = []  # (pos, depth)
+def _complexity(root, bq, pos) -> tuple[list[int], list[tuple[int, int]], int]:
+    """Decision points and control-structure nesting: (branch positions, (pos, depth), max depth)."""
+    nests: list[tuple[int, int]] = []
     branch_pos: list[int] = []
     max_depth = 0
     if bq is not None:
+        from tree_sitter import QueryCursor
         caps = QueryCursor(bq).captures(root)
         items = [(n.start_byte, -n.end_byte, "nest", n) for n in caps.get("nest", [])]
         items += [(n.start_byte, -n.end_byte, "branch", n) for n in caps.get("branch", [])]
@@ -397,9 +373,12 @@ def ts_extract(data: bytes, lang: str):
             max_depth = max(max_depth, len(stack))
     branch_pos.sort()
     nests.sort()
-    nest_pos = [p for p, _ in nests]
+    return branch_pos, nests, max_depth
 
-    # symbols in start order; parent = innermost enclosing symbol
+
+def _assemble(defs, refs_raw, branch_pos: list[int], nests: list[tuple[int, int]]):
+    """Symbols in start order (parent = innermost enclosing symbol) and refs attached to them."""
+    nest_pos = [p for p, _ in nests]
     defs.sort(key=lambda d: (d[0], -d[1]))
     symbols: list[list] = []
     spans: list[tuple[int, int]] = []
@@ -425,6 +404,39 @@ def ts_extract(data: bytes, lang: str):
         while k >= 0 and not (spans[k][0] <= p < spans[k][1]):
             k = symbols[k][4]
         refs.append((k, name, line, qual))
+    return symbols, refs
+
+
+def ts_extract(data: bytes, lang: str):
+    """Returns (symbols, refs, branches, nesting) or None when tree-sitter is unavailable.
+
+    symbols: [kind, name, start_line, end_line, parent_idx, branches, nesting]
+    refs:    (caller_idx or -1, callee name, line, qualified 0/1)
+    """
+    entry = _ts_for(lang)
+    if entry is None:
+        return None
+    parser, tags, calls_q, bq = entry
+    root = parser.parse(data).root_node
+    # Positions are byte offsets, or line numbers when symbols come from the line-based
+    # process() fallback; containment logic works the same in either unit.
+    defs, refs_raw = _collect_captures(root, data, tags, calls_q)
+    line_based = tags is None
+    if line_based:
+        try:
+            structure = _process_structure(data.decode("utf-8", "replace"), lang)
+        except Exception:
+            structure = []
+        if not structure:
+            return None  # no tags query and no structure: regex does better here
+        defs = [(sl, el + 1, kind, name, sl, el) for sl, el, kind, name in structure]
+        refs_raw = [(line, name, line, q) for _, name, line, q in refs_raw]
+
+    def pos(n) -> int:
+        return n.start_point[0] + 1 if line_based else n.start_byte
+
+    branch_pos, nests, max_depth = _complexity(root, bq, pos)
+    symbols, refs = _assemble(defs, refs_raw, branch_pos, nests)
     return symbols, refs, len(branch_pos), max_depth
 
 

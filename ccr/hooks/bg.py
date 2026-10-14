@@ -10,6 +10,7 @@ import os
 import sys
 import time
 from pathlib import Path
+import contextlib
 
 LOCK_STALE_S = 600
 
@@ -58,10 +59,8 @@ def main(argv: list[str]) -> int:
     except Exception as e:  # noqa: BLE001
         log(root, f"bg graph refresh failed: {e.__class__.__name__}: {e}")
     finally:
-        try:
+        with contextlib.suppress(OSError):
             lock_path(root).unlink()
-        except OSError:
-            pass
     return 0
 
 

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ccr.hooks.common import Msg, load_session, log, save_session
 from ccr.hooks.tasks import sweep
+import contextlib
 
 CHEAP_CHANGED_FILES = 150
 
@@ -49,10 +50,8 @@ def graph_status(root: Path, cfg) -> str:
     changed = 0
     for r in f.get("reasons", []):
         if "file(s) modified" in r:
-            try:
+            with contextlib.suppress(ValueError):
                 changed = int(r.split()[0])
-            except ValueError:
-                pass
     from ccr.hooks.bg import lock_held
     if lock_held(root):
         return f"graph refresh already running ({n} files)"

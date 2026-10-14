@@ -131,80 +131,90 @@ def noisy_or(values: dict[str, float], weights: dict[str, float], names) -> floa
     return round(1.0 - miss, 3)
 
 
-def assess_risk(location, task: str, cfg, graph=None, memory=None) -> Risk:
-    rc = cfg["risk"]
-    weights = rc["weights"]
-    risk = Risk(components={n: Component(n) for n in COMPONENTS})
-    comp = risk.components
-    prim = location.primary()
-    risk.evaluated = [c.path for c in prim]
+class _Best:
+    """Strongest evidence per risk component: (value, detail, file)."""
 
-    def scale(conf: float) -> float:
-        return min(1.0, conf / 0.7)
+    def __init__(self) -> None:
+        self.items = {n: (0.0, "", None) for n in COMPONENTS}
 
-    # code metrics ---------------------------------------------------------------------
-    blast_union: set[str] = set()
-    best = {n: (0.0, "", None) for n in COMPONENTS}   # value, detail, file
+    def offer(self, name: str, value: float, detail: str, path: str | None) -> None:
+        if value > self.items[name][0] or (self.items[name][2] is None and detail):
+            self.items[name] = (value, detail, path)
 
-    def offer(name: str, value: float, detail: str, path: str) -> None:
-        if value > best[name][0] or (best[name][2] is None and detail):
-            best[name] = (value, detail, path)
 
-    test_rank = {"none": 0, "name-matched": 1, "direct": 2}
-    if graph is not None:
-        full_blast = math.log2(1 + rc["blast_full"])
-        for c in prim:
-            if not c.indexed:
-                continue
-            s = scale(c.confidence)
-            try:
-                deps = graph.dependents(c.path)
-            except Exception:
-                deps = []
-            blast_union.update(d.path for d in deps)
-            n = len(deps)
-            direct = sum(1 for d in deps if d.depth == 1)
-            v = min(1.0, math.log2(1 + n) / full_blast) if n else 0.0
-            offer("blast_radius", v * s, f"{n} dependents of {c.path} ({direct} direct)"
-                  if n else f"no dependents of {c.path}", c.path)
-            cx = graph.complexity(c.path) or {}
-            mfb, nest, loc = (cx.get("max_function_branches", 0), cx.get("nesting", 0),
-                              cx.get("loc", 0))
-            v = (0.5 * min(1.0, mfb / rc["complexity_full_branches"])
-                 + 0.25 * min(1.0, nest / 5) + 0.25 * min(1.0, loc / 600))
-            hot = (cx.get("hotspots") or [{}])[0].get("name")
-            offer("complexity", v * s, f"{c.path}: max function branches {mfb}"
-                  + (f" ({hot})" if hot else "") + f", nesting {nest}, {loc} loc", c.path)
-            if not c.is_test:
-                tests = graph.tests_for(c.path)
-                linked = [t for t in tests if t.reason != "name"]
-                kind = "direct" if linked else "name-matched" if tests else "none"
-                if risk.tests is None or test_rank[kind] > test_rank[risk.tests]:
-                    risk.tests = kind
-                if not tests:
-                    offer("test_proximity", 1.0 * s, f"no tests found for {c.path}", c.path)
-                elif not linked:
-                    offer("test_proximity", 0.4 * s,
-                          f"{c.path}: only name-matched tests ({tests[0].path})", c.path)
-                else:
-                    offer("test_proximity", 0.0, f"{c.path} covered by {linked[0].path} "
-                          f"({linked[0].reason})", c.path)
-            ch = graph.churn(c.path)
-            if ch:
-                v = (0.7 * min(1.0, ch["commits"] / rc["churn_full_commits"])
-                     + 0.3 * min(1.0, ch["authors"] / 5))
-                offer("churn", v * s, f"{c.path}: {ch['commits']} commits, {ch['authors']} "
-                      f"author(s) in {ch['window_days']}d", c.path)
+def _scale(conf: float) -> float:
+    return min(1.0, conf / 0.7)
+
+
+_TEST_RANK = {"none": 0, "name-matched": 1, "direct": 2}
+
+
+def _file_metrics(risk: Risk, c, graph, rc: dict, full_blast: float, best: _Best,
+                  blast_union: set[str]) -> None:
+    """Offer blast radius, complexity, test proximity and churn evidence for one candidate."""
+    s = _scale(c.confidence)
+    try:
+        deps = graph.dependents(c.path)
+    except Exception:
+        deps = []
+    blast_union.update(d.path for d in deps)
+    n = len(deps)
+    direct = sum(1 for d in deps if d.depth == 1)
+    v = min(1.0, math.log2(1 + n) / full_blast) if n else 0.0
+    best.offer("blast_radius", v * s, f"{n} dependents of {c.path} ({direct} direct)"
+               if n else f"no dependents of {c.path}", c.path)
+    cx = graph.complexity(c.path) or {}
+    mfb, nest, loc = (cx.get("max_function_branches", 0), cx.get("nesting", 0), cx.get("loc", 0))
+    v = (0.5 * min(1.0, mfb / rc["complexity_full_branches"])
+         + 0.25 * min(1.0, nest / 5) + 0.25 * min(1.0, loc / 600))
+    hot = (cx.get("hotspots") or [{}])[0].get("name")
+    best.offer("complexity", v * s, f"{c.path}: max function branches {mfb}"
+               + (f" ({hot})" if hot else "") + f", nesting {nest}, {loc} loc", c.path)
+    if not c.is_test:
+        _test_metrics(risk, c, graph, s, best)
+    ch = graph.churn(c.path)
+    if ch:
+        v = (0.7 * min(1.0, ch["commits"] / rc["churn_full_commits"])
+             + 0.3 * min(1.0, ch["authors"] / 5))
+        best.offer("churn", v * s, f"{c.path}: {ch['commits']} commits, {ch['authors']} "
+                   f"author(s) in {ch['window_days']}d", c.path)
+
+
+def _test_metrics(risk: Risk, c, graph, s: float, best: _Best) -> None:
+    tests = graph.tests_for(c.path)
+    linked = [t for t in tests if t.reason != "name"]
+    kind = "direct" if linked else "name-matched" if tests else "none"
+    if risk.tests is None or _TEST_RANK[kind] > _TEST_RANK[risk.tests]:
+        risk.tests = kind
+    if not tests:
+        best.offer("test_proximity", 1.0 * s, f"no tests found for {c.path}", c.path)
+    elif not linked:
+        best.offer("test_proximity", 0.4 * s,
+                   f"{c.path}: only name-matched tests ({tests[0].path})", c.path)
+    else:
+        best.offer("test_proximity", 0.0, f"{c.path} covered by {linked[0].path} "
+                   f"({linked[0].reason})", c.path)
+
+
+def _code_metrics(risk: Risk, prim, graph, rc: dict, best: _Best) -> None:
+    if graph is None:
         if prim:
-            blast_union -= {c.path for c in prim}
-            risk.dependents = len(blast_union)
-            if len(prim) > 1 and blast_union:
-                v, d, p = best["blast_radius"]
-                best["blast_radius"] = (v, d + f"; {len(blast_union)} across all candidates", p)
-    elif prim:
-        risk.notes.append("no code graph: blast radius, complexity, tests and churn unknown")
+            risk.notes.append("no code graph: blast radius, complexity, tests and churn unknown")
+        return
+    blast_union: set[str] = set()
+    full_blast = math.log2(1 + rc["blast_full"])
+    for c in prim:
+        if c.indexed:
+            _file_metrics(risk, c, graph, rc, full_blast, best, blast_union)
+    if prim:
+        blast_union -= {c.path for c in prim}
+        risk.dependents = len(blast_union)
+        if len(prim) > 1 and blast_union:
+            v, d, p = best.items["blast_radius"]
+            best.items["blast_radius"] = (v, d + f"; {len(blast_union)} across all candidates", p)
 
-    # critical paths -------------------------------------------------------------------
+
+def _critical_paths(risk: Risk, prim, task: str, cfg, best: _Best) -> None:
     groups = cfg["critical_paths"]
     for c in prim:
         hit = critical_groups_for(c.path, groups)
@@ -213,32 +223,48 @@ def assess_risk(location, task: str, cfg, graph=None, memory=None) -> Risk:
             for g in hit:
                 if g not in risk.critical_groups:
                     risk.critical_groups.append(g)
-            offer("critical_path", scale(c.confidence), f"{'/'.join(hit)}: {c.path}", c.path)
+            best.offer("critical_path", _scale(c.confidence), f"{'/'.join(hit)}: {c.path}", c.path)
     for g, t in prompt_critical_terms(task, cfg["critical_terms"]):
         risk.critical_terms.append(t)
         if g not in risk.critical_groups:
             risk.critical_groups.append(g)
-    if risk.critical_terms and best["critical_path"][0] < PROMPT_CRITICAL_VALUE:
+    current = best.items["critical_path"]
+    if risk.critical_terms and current[0] < PROMPT_CRITICAL_VALUE:
         terms = ", ".join(f"'{t}'" for t in risk.critical_terms[:3])
-        best["critical_path"] = (PROMPT_CRITICAL_VALUE,
-                                 f"prompt mentions {terms} ({'/'.join(risk.critical_groups)})",
-                                 None)
+        best.items["critical_path"] = (
+            PROMPT_CRITICAL_VALUE,
+            f"prompt mentions {terms} ({'/'.join(risk.critical_groups)})", None)
     elif risk.critical_terms:
-        v, d, p = best["critical_path"]
-        best["critical_path"] = (v, d + f"; prompt mentions '{risk.critical_terms[0]}'", p)
+        v, d, p = current
+        best.items["critical_path"] = (v, d + f"; prompt mentions '{risk.critical_terms[0]}'", p)
 
-    # memory flags ---------------------------------------------------------------------
-    if memory is not None:
-        for c in prim:
-            for sig in memory.signals_for(c.path):
-                risk.memory_flags.append(MemoryFlag(sig.kind, sig.path_or_term, c.path,
-                                                    sig.text, sig.source))
-                v = MEMORY_KIND_VALUE.get(sig.kind, 0.3) * scale(c.confidence)
-                offer("memory", v, f"{sig.kind}: '{sig.path_or_term}' ({_short(sig.text)})",
-                      c.path)
+
+def _memory_flags(risk: Risk, prim, memory, best: _Best) -> None:
+    if memory is None:
+        return
+    for c in prim:
+        for sig in memory.signals_for(c.path):
+            risk.memory_flags.append(MemoryFlag(sig.kind, sig.path_or_term, c.path,
+                                                sig.text, sig.source))
+            v = MEMORY_KIND_VALUE.get(sig.kind, 0.3) * _scale(c.confidence)
+            best.offer("memory", v, f"{sig.kind}: '{sig.path_or_term}' ({_short(sig.text)})", c.path)
+
+
+def assess_risk(location, task: str, cfg, graph=None, memory=None) -> Risk:
+    rc = cfg["risk"]
+    weights = rc["weights"]
+    risk = Risk(components={n: Component(n) for n in COMPONENTS})
+    comp = risk.components
+    prim = location.primary()
+    risk.evaluated = [c.path for c in prim]
+    best = _Best()
+
+    _code_metrics(risk, prim, graph, rc, best)
+    _critical_paths(risk, prim, task, cfg, best)
+    _memory_flags(risk, prim, memory, best)
 
     for n in COMPONENTS:
-        v, d, p = best[n]
+        v, d, p = best.items[n]
         comp[n].value = round(v, 3)
         if d:
             comp[n].detail = d

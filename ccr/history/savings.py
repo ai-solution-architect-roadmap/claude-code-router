@@ -16,7 +16,6 @@ to show which rule to tune.
 """
 from __future__ import annotations
 
-from collections import Counter
 
 from ccr.config import TIERS
 from ccr.history.learn import FAILURE, SUCCESS, tier_counts

@@ -30,4 +30,12 @@ line-length = 110
 extend-exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "B", "SIM", "C901"]
+ignore = [
+    "B008",   # typer.Option/Argument in defaults is the typer idiom
+    "SIM905", # word lists as split() strings are easier to maintain
+    "SIM112", # Windows env var names are case-sensitive spellings we look up on purpose
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15

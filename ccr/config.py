@@ -224,11 +224,14 @@ def _str_list(cfg: Config, where: str, v: object) -> bool:
 
 
 def _merge_validated(cfg: Config, raw: dict) -> None:
-    d = cfg.data
     for key in raw:
         if key not in DEFAULTS and key != "version":
             cfg.warnings.append(f"unknown config key {key!r} ignored")
+    for merge in _MERGERS:
+        merge(cfg, raw)
 
+def _merge_tiers(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     tiers = raw.get("tiers")
     if tiers is not None:
         if not isinstance(tiers, dict):
@@ -267,6 +270,9 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
                         cfg.warnings.append(f"{where}: unknown field ignored")
             _check_monotonic(cfg)
 
+
+def _merge_class_base(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     cb = raw.get("class_base")
     if cb is not None:
         if not isinstance(cb, dict):
@@ -281,6 +287,9 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
                 else:
                     d["class_base"][k] = v
 
+
+def _merge_critical(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     for key in ("critical_paths", "critical_terms"):
         groups = raw.get(key)
         if groups is None:
@@ -295,10 +304,16 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
                 d[key][str(g)] = [x.strip() if key == "critical_paths" else x.strip().lower()
                                   for x in items]
 
+
+def _merge_hard_terms(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     ht = raw.get("hard_terms")
-    if ht is not None:
-        if ht is None or _str_list(cfg, "hard_terms", ht):
-            d["hard_terms"] = [x.strip().lower() for x in ht if x.strip()]
+    if ht is not None and (ht is None or _str_list(cfg, "hard_terms", ht)):
+        d["hard_terms"] = [x.strip().lower() for x in ht if x.strip()]
+
+
+def _merge_pricing(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     pricing = raw.get("pricing")
     if pricing is not None:
         if not isinstance(pricing, dict):
@@ -310,6 +325,9 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
                 elif _num(cfg, f"pricing.{k}", v, 0, 100_000):
                     d["pricing"][k] = float(v)
 
+
+def _merge_risk(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     risk = raw.get("risk")
     if risk is not None:
         if not isinstance(risk, dict):
@@ -338,9 +356,15 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
                 d["risk"]["medium"], d["risk"]["high"] = (DEFAULTS["risk"]["medium"],
                                                           DEFAULTS["risk"]["high"])
 
+
+def _merge_budget(cfg: Config, raw: dict) -> None:
     _section(cfg, raw, "budget", {
         "soft_limit_pct": (0, 100), "state_max_age_hours": (0, 24 * 30),
         "weekly_token_limit": (1, 10**13)}, nullable={"weekly_token_limit"})
+
+
+def _merge_history(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     hist = raw.get("history")
     if isinstance(hist, dict) and "explore_down" in hist:
         hist = dict(hist)
@@ -352,6 +376,10 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
     _section(cfg, {"history": hist}, "history", {
         "min_samples": (1, 10_000), "fail_rate_up": (0, 1), "success_rate_down": (0, 1),
         "window_days": (1, 3650)})
+
+
+def _merge_run(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     run = raw.get("run")
     if isinstance(run, dict):
         run = dict(run)
@@ -371,6 +399,10 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
             d["run"]["max_escalations"] = int(d["run"]["max_escalations"])
     elif run is not None:
         cfg.errors.append("run: expected a mapping")
+
+
+def _merge_llm(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     llm = raw.get("llm")
     if isinstance(llm, dict):
         llm = dict(llm)
@@ -389,6 +421,9 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
     elif llm is not None:
         cfg.errors.append("llm: expected a mapping")
 
+
+def _merge_routing(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     routing = raw.get("routing")
     if isinstance(routing, dict):
         for k, v in routing.items():
@@ -405,6 +440,9 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
     elif routing is not None:
         cfg.errors.append("routing: expected a mapping")
 
+
+def _merge_hooks(cfg: Config, raw: dict) -> None:
+    d = cfg.data
     hooks = raw.get("hooks")
     if isinstance(hooks, dict):
         for k, v in hooks.items():
@@ -420,6 +458,12 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
                 cfg.warnings.append(f"hooks.{k}: unknown field ignored")
     elif hooks is not None:
         cfg.errors.append("hooks: expected a mapping")
+
+
+# One validator per config section, run in this order; add a section by appending here.
+_MERGERS = (_merge_tiers, _merge_class_base, _merge_critical, _merge_hard_terms, _merge_pricing,
+            _merge_risk, _merge_budget, _merge_history, _merge_run, _merge_llm, _merge_routing,
+            _merge_hooks)
 
 
 def _section(cfg: Config, raw: dict, name: str, ranges: dict[str, tuple[float, float]],

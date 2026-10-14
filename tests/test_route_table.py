@@ -194,3 +194,14 @@ def test_three_signals_climb_two_tiers(monkeypatch, tmp_path):
     assert any(r.startswith("+2:") for r in d.reasons)
     cfg.data["routing"]["max_escalation"] = 1
     assert _route(tc, Location(), risk, Budget(), [], cfg, 0.9).tier.name == "T2"
+
+
+def test_decision_record_and_dict_agree(tmp_path):
+    """`record()` / `to_dict()` mirror the Decision: a renamed field must not silently drop."""
+    from ccr.route import decide
+    d = decide("fix the typo in README", tmp_path)
+    rec, full = d.record(), d.to_dict()
+    assert rec["tier"] == full["tier"] == d.tier.name
+    assert rec["class"] == full["class"]["kind"]
+    assert set(rec["trace"]) >= {"base", "scope", "bumps", "hard_terms", "elapsed_ms"}
+    assert set(full) >= {"tier", "model", "effort", "agent", "reasons", "risk", "budget", "location"}

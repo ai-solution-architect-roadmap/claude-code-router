@@ -22,6 +22,7 @@ as a `failure` of its tier with `escalated_to`, the next one carries `escalated_
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -29,9 +30,12 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from ccr.config import TIERS
+from ccr.config import TIERS, Config
+
+if TYPE_CHECKING:
+    from ccr.route import Decision
 
 TEST_TAIL_CHARS = 3000
 
@@ -209,13 +213,59 @@ def next_tier(cur: int, decision, cfg) -> tuple[int | None, str]:
     return nxt, ""
 
 
-def run_task(task: str, root: str | Path, *, cfg=None, tier: str | None = None,
+def _invoke(a: Attempt, exe: str | None, t, runner: Runner, prompt: str, root: Path, env: dict,
+            rc: dict, max_turns: int, left: float | None, permission_mode: str | None) -> None:
+    """Run claude once and fill `a` with the outcome."""
+    if exe is None:
+        a.outcome, a.reason = "error", "claude_not_found"
+        return
+    argv = build_argv(exe, t, max_turns=max_turns, max_budget_usd=left,
+                      permission_mode=permission_mode)
+    try:
+        p = runner(argv, prompt, root, env, float(rc["timeout_s"]))
+    except subprocess.TimeoutExpired:
+        a.outcome, a.reason = "error", "timeout"
+        return
+    except OSError as e:
+        a.outcome, a.reason = "error", f"cannot_run ({e.__class__.__name__})"
+        return
+    a.exit_code = p.returncode
+    data = parse_result(p.stdout)
+    if data is None:
+        a.outcome, a.reason = "error", f"no_json_exit_{p.returncode}"
+        return
+    absorb_result(a, data)
+    if p.returncode == 0 and a.is_error is False and a.subtype == "success":
+        a.outcome, a.reason = "success", "success"
+    else:
+        a.outcome = "failure"
+        a.reason = (a.subtype if a.subtype and a.subtype != "success"
+                    else "is_error" if a.is_error else f"exit_{p.returncode}")
+
+
+def _run_tests(a: Attempt, test_cmd: str, test_runner: TestRunner, root: Path, env: dict,
+               rc: dict) -> None:
+    """Run the project's tests after a successful attempt; a failure downgrades the outcome."""
+    try:
+        tp = test_runner(test_cmd, root, {k: v for k, v in env.items() if k != "CCR_INTERNAL"},
+                         float(rc["test_timeout_s"]))
+        a.test = "pass" if tp.returncode == 0 else "fail"
+        a.test_tail = ((tp.stdout or "") + (tp.stderr or ""))[-TEST_TAIL_CHARS:]
+    except subprocess.TimeoutExpired:
+        a.test = "timeout"
+    except OSError:
+        a.test = "fail"
+    if a.test != "pass":
+        a.outcome, a.reason = "failure", "test_failed"
+
+
+def run_task(task: str, root: str | Path, *, cfg: Config | None = None, tier: str | None = None,
              max_turns: int | None = None, max_budget_usd: float | None = None,
              max_escalations: int | None = None, test_command: str | None = None,
              use_tests: bool = True, permission_mode: str | None = None,
              allow_llm: bool = True, runner: Runner | None = None,
              test_runner: TestRunner | None = None, environ: dict | None = None,
-             decision=None, echo: Callable[[str], None] | None = None,
+             decision: Decision | None = None, echo: Callable[[str], None] | None = None,
              record: bool = True, claude_exe: str | None = None) -> RunResult:
     from ccr import history as H
     from ccr.config import load_config
@@ -240,10 +290,8 @@ def run_task(task: str, root: str | Path, *, cfg=None, tier: str | None = None,
     d = decision
     assist_cost = None
     if d.llm_used and "[~$" in d.llm:
-        try:
+        with contextlib.suppress(ValueError):
             assist_cost = float(d.llm.rsplit("[~$", 1)[1].rstrip("]"))
-        except ValueError:
-            pass
     cur = TIERS.index(tier) if tier else d.tier.index
     res = RunResult(decision=d, attempts=[], run_id=H.new_id())
     exe = claude_exe or find_claude(env)
@@ -258,49 +306,12 @@ def run_task(task: str, root: str | Path, *, cfg=None, tier: str | None = None,
             + (f" (escalated from {prev.tier})" if prev else "")
             + (f", budget left ${left:.2f}" if left is not None else ""))
         t0 = time.time()
-        if exe is None:
-            a.outcome, a.reason = "error", "claude_not_found"
-        else:
-            argv = build_argv(exe, t, max_turns=max_turns, max_budget_usd=left,
-                              permission_mode=permission_mode)
-            try:
-                p = runner(argv, prompt, root, env, float(rc["timeout_s"]))
-            except subprocess.TimeoutExpired:
-                p = None
-                a.outcome, a.reason = "error", "timeout"
-            except OSError as e:
-                p = None
-                a.outcome, a.reason = "error", f"cannot_run ({e.__class__.__name__})"
-            if p is not None:
-                a.exit_code = p.returncode
-                data = parse_result(p.stdout)
-                if data is None:
-                    a.outcome, a.reason = "error", f"no_json_exit_{p.returncode}"
-                else:
-                    absorb_result(a, data)
-                    ok = p.returncode == 0 and a.is_error is False and a.subtype == "success"
-                    if ok:
-                        a.outcome, a.reason = "success", "success"
-                    else:
-                        a.outcome = "failure"
-                        a.reason = (a.subtype if a.subtype and a.subtype != "success"
-                                    else "is_error" if a.is_error else f"exit_{p.returncode}")
+        _invoke(a, exe, t, runner, prompt, root, env, rc, max_turns, left, permission_mode)
         if a.duration_ms is None:
             a.duration_ms = int((time.time() - t0) * 1000)
         if a.outcome == "success" and test_cmd:
             say(f"  test: {test_cmd}")
-            try:
-                tp = test_runner(test_cmd, root, {k: v for k, v in env.items()
-                                                  if k != "CCR_INTERNAL"},
-                                 float(rc["test_timeout_s"]))
-                a.test = "pass" if tp.returncode == 0 else "fail"
-                a.test_tail = ((tp.stdout or "") + (tp.stderr or ""))[-TEST_TAIL_CHARS:]
-            except subprocess.TimeoutExpired:
-                a.test = "timeout"
-            except OSError:
-                a.test = "fail"
-            if a.test != "pass":
-                a.outcome, a.reason = "failure", "test_failed"
+            _run_tests(a, test_cmd, test_runner, root, env, rc)
         res.attempts.append(a)
 
         nxt, why = (None, "")

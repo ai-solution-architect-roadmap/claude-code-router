@@ -104,10 +104,7 @@ class Decision:
 
 
 def overall_confidence(tc: TaskClass, loc: Location) -> float:
-    if tc.kind == "question":
-        loc_factor = 0.85 + 0.15 * loc.confidence
-    else:
-        loc_factor = 0.6 + 0.4 * loc.confidence
+    loc_factor = 0.85 + 0.15 * loc.confidence if tc.kind == "question" else 0.6 + 0.4 * loc.confidence
     return round(tc.confidence * loc_factor * (1 - 0.35 * tc.vagueness), 3)
 
 
@@ -238,72 +235,118 @@ def _impactful(risk: Risk) -> str | None:
     return None
 
 
-def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: list[dict],
-           cfg: Config, conf: float) -> Decision:
-    kind = tc.kind
-    base_name = cfg["class_base"][kind]
-    base = TIERS.index(base_name)
-    max_esc = int(cfg["routing"]["max_escalation"])
-    ceiling = TIERS.index(cfg["routing"]["ceiling_without_critical"])
-    reasons = [f"base {base_name} for {kind}"
-               + (f" (matched {tc.evidence()})" if tc.evidence() else "")
-               + (" [class from LLM]" if tc.source == "llm" else "")]
+_NO_DOWN = {"migration", "security", "debugging"}
+_CRITICAL_UP = ("critical path", "memory flags")
+_WORDING_UP = ("hard problem", "vague bug", "large scope")
 
-    ups, downs = [], []
+
+def _scope_label(tc: TaskClass) -> str:
+    return ", ".join(tc.scope_terms[:3]) or "LLM"
+
+
+# Each signal rule inspects the task and returns a reason string when it applies. New rules
+# are added to _UP_RULES / _DOWN_RULES; _signals and _route do not change. Order is the order
+# reasons are reported in.
+
+def _up_large_scope(tc, loc, risk):
     if tc.scope == "large":
-        ups.append(f"large scope ({', '.join(tc.scope_terms[:3]) or 'LLM'})")
-    if tc.scope == "small" and kind in SUBSTANTIVE - {"migration", "security", "debugging"}:
-        downs.append(f"small scope ({', '.join(tc.scope_terms[:3]) or 'LLM'})")
-    if tc.steps and kind in SUBSTANTIVE - {"migration", "security", "debugging"} \
-            and not tc.destructive:
-        downs.append(f"explicit step-by-step instructions ({tc.steps} steps)")
-    if tc.vague and kind == "bugfix":
-        ups.append(f"vague bug report (vagueness {tc.vagueness:.2f}): needs exploration")
-    if tc.hard and kind in ("perf", "bugfix"):
-        ups.append(f"hard problem ({', '.join(tc.hard[:2])})")
+        return f"large scope ({_scope_label(tc)})"
+
+
+def _up_vague_bug(tc, loc, risk):
+    if tc.vague and tc.kind == "bugfix":
+        return f"vague bug report (vagueness {tc.vagueness:.2f}): needs exploration"
+
+
+def _up_hard_problem(tc, loc, risk):
+    if tc.hard and tc.kind in ("perf", "bugfix"):
+        return f"hard problem ({', '.join(tc.hard[:2])})"
+
+
+def _up_code_difficulty(tc, loc, risk):
+    kind = tc.kind
     # the codebase decides how hard a bug is, whatever the wording: complex code that is
     # widely depended on or untested needs a stronger model to diagnose safely
     deep = _deep_code(risk) if kind in ("bugfix", "debugging", "perf") else None
     if deep:
-        ups.append(f"complex code ({deep})")
-    elif risk.level == "high" and kind in SUBSTANTIVE:
-        ups.append(f"risk high ({risk.score:.2f})")
-    elif kind in SUBSTANTIVE and not tc.evidence_terms() and tc.confidence < UNSURE_CLASS \
+        return f"complex code ({deep})"
+    if risk.level == "high" and kind in SUBSTANTIVE:
+        return f"risk high ({risk.score:.2f})"
+    if kind in SUBSTANTIVE and not tc.evidence_terms() and tc.confidence < UNSURE_CLASS \
             and not tc.steps and loc.located and _impactful(risk):
         # a terse prompt with no cue words says nothing about difficulty: let the code decide
-        ups.append(f"unclassified task on impactful code ({_impactful(risk)})")
+        return f"unclassified task on impactful code ({_impactful(risk)})"
+
+
+def _up_critical_path(tc, loc, risk):
+    kind = tc.kind
     if kind in SUBSTANTIVE and risk.critical or kind == "trivial" and risk.critical_located:
-        ups.append(f"critical path ({'/'.join(risk.critical_groups)})")
-    if kind in CHANGE and risk.has_memory("critical", "protected", "fragile"):
+        return f"critical path ({'/'.join(risk.critical_groups)})"
+
+
+def _up_memory_flags(tc, loc, risk):
+    if tc.kind in CHANGE and risk.has_memory("critical", "protected", "fragile"):
         kinds = sorted({f.kind for f in risk.memory_flags
                         if f.kind in ("critical", "protected", "fragile")})
-        ups.append(f"memory flags {'/'.join(kinds)} on {risk.memory_flags[0].path}")
+        return f"memory flags {'/'.join(kinds)} on {risk.memory_flags[0].path}"
 
-    tier = base
-    if ups and max_esc <= 0:
+
+def _down_small_scope(tc, loc, risk):
+    if tc.scope == "small" and tc.kind in SUBSTANTIVE - _NO_DOWN:
+        return f"small scope ({_scope_label(tc)})"
+
+
+def _down_explicit_steps(tc, loc, risk):
+    if tc.steps and tc.kind in SUBSTANTIVE - _NO_DOWN and not tc.destructive:
+        return f"explicit step-by-step instructions ({tc.steps} steps)"
+
+
+_UP_RULES = (_up_large_scope, _up_vague_bug, _up_hard_problem, _up_code_difficulty,
+             _up_critical_path, _up_memory_flags)
+_DOWN_RULES = (_down_small_scope, _down_explicit_steps)
+
+
+def _signals(tc: TaskClass, loc: Location, risk: Risk) -> tuple[list[str], list[str]]:
+    """The +1 signals (`ups`) and -1 signals (`downs`) that apply to this task."""
+    ups = [r for rule in _UP_RULES if (r := rule(tc, loc, risk))]
+    downs = [r for rule in _DOWN_RULES if (r := rule(tc, loc, risk))]
+    return ups, downs
+
+
+def _escalate(tier: int, ups: list[str], max_esc: int, reasons: list[str]) -> int:
+    if not ups:
+        return tier
+    if max_esc <= 0:
         reasons.append("escalation disabled (routing.max_escalation 0): " + "; ".join(ups))
-    elif ups:
-        # one tier normally; two when three or more independent signals agree, or when a
-        # critical path meets a difficulty signal from the wording (a hard bug in auth code
-        # is not a T2 job). Risk and critical path both come from the code, so they don't
-        # count as two opinions.
-        crit = any(u.startswith(("critical path", "memory flags")) for u in ups)
-        wording = any(u.startswith(("hard problem", "vague bug", "large scope")) for u in ups)
-        step = 2 if (len(ups) >= 3 or crit and wording) and max_esc >= 2 else 1
-        tier += step
-        reasons.append(f"+{step}: " + "; ".join(ups)
-                       + (" (escalation capped at one tier)" if len(ups) > 1 and step == 1
-                          else ""))
-    critical_up = any(u.startswith(("critical path", "memory flags")) for u in ups)
-    if downs and critical_up:
-        reasons.append(f"{'; '.join(downs)}: ignored on a critical path")
-    elif downs:
-        floor = 1 if kind in SUBSTANTIVE else 0
-        if tier - 1 >= floor:
-            tier -= 1
-            reasons.append("-1: " + "; ".join(downs))
-        else:
-            reasons.append(f"{'; '.join(downs)}: already at the {TIERS[floor]} floor for {kind}")
+        return tier
+    # one tier normally; two when three or more independent signals agree, or when a
+    # critical path meets a difficulty signal from the wording (a hard bug in auth code
+    # is not a T2 job). Risk and critical path both come from the code, so they don't
+    # count as two opinions.
+    crit = any(u.startswith(_CRITICAL_UP) for u in ups)
+    wording = any(u.startswith(_WORDING_UP) for u in ups)
+    step = 2 if (len(ups) >= 3 or crit and wording) and max_esc >= 2 else 1
+    reasons.append(f"+{step}: " + "; ".join(ups)
+                   + (" (escalation capped at one tier)" if len(ups) > 1 and step == 1 else ""))
+    return tier + step
+
+
+def _descend(tier: int, downs: list[str], kind: str, critical_up: bool, reasons: list[str]) -> int:
+    if not downs:
+        return tier
+    text = "; ".join(downs)
+    if critical_up:
+        reasons.append(f"{text}: ignored on a critical path")
+        return tier
+    floor = 1 if kind in SUBSTANTIVE else 0
+    if tier - 1 >= floor:
+        reasons.append("-1: " + text)
+        return tier - 1
+    reasons.append(f"{text}: already at the {TIERS[floor]} floor for {kind}")
+    return tier
+
+
+def _risk_note(kind: str, risk: Risk, ups: list[str], downs: list[str], reasons: list[str]) -> None:
     if not ups and not downs:
         if risk.level == "unknown":
             reasons.append("risk unknown (no files located): no risk adjustment")
@@ -315,19 +358,102 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     elif risk.level in ("low", "medium") and not any(u.startswith("risk") for u in ups):
         reasons.append(f"risk {risk.level} ({risk.score:.2f})")
 
-    # history (learning loop, ccr/history/learn.py) -------------------------------------
+
+# T4 rules: each returns a reason when the task must run at T4. Add a rule to _T4_RULES to
+# extend the policy. A rule sees the reasons found so far (the production-migration rule
+# only applies when no other rule fired).
+
+def _t4_security(tc, risk, cfg, found):
+    if tc.kind == "security" and risk.critical:
+        return f"security change on a critical path ({'/'.join(risk.critical_groups)})"
+
+
+def _t4_destructive_migration(tc, risk, cfg, found):
+    if tc.kind == "migration" and risk.critical and tc.destructive:
+        return (f"destructive migration ({', '.join(tc.destructive[:2])}) on "
+                f"{'/'.join(risk.critical_groups)}")
+
+
+def _t4_memory_marked(tc, risk, cfg, found):
+    if tc.kind in SUBSTANTIVE - {"tests"} and risk.critical_located and \
+            risk.has_memory("critical", "protected"):
+        flag = next(f for f in risk.memory_flags if f.kind in ("critical", "protected"))
+        return f"memory marks {flag.path} {flag.kind} ('{flag.term}')"
+
+
+def _t4_risky_critical_code(tc, risk, cfg, found):
+    if tc.kind in SUBSTANTIVE - {"tests"} and risk.critical_located and tc.scope != "small" and \
+            risk.code_risk >= cfg["risk"]["t4_code_risk"]:
+        return (f"critical path {'/'.join(risk.critical_groups)} with code risk "
+                f"{risk.code_risk:.2f}")
+
+
+def _t4_production_migration(tc, risk, cfg, found):
+    prod = [t for t in tc.destructive if "prod" in t or "live data" in t]
+    if tc.kind == "migration" and prod and not found:
+        return f"destructive migration against production ({', '.join(tc.destructive[:2])})"
+
+
+_T4_RULES = (_t4_security, _t4_destructive_migration, _t4_memory_marked,
+             _t4_risky_critical_code, _t4_production_migration)
+
+
+def _t4_rules(tc: TaskClass, risk: Risk, cfg: Config) -> list[str]:
+    """Critical-path rules that jump straight to T4."""
+    found: list[str] = []
+    for rule in _T4_RULES:
+        reason = rule(tc, risk, cfg, found)
+        if reason:
+            found.append(reason)
+    return found
+
+
+def _under_budget(tier: int, t4: list[str], risk: Risk, budget: Budget, reasons: list[str]) -> int:
+    if not budget.pressure:
+        return tier
+    if t4 or tier >= 4:
+        reasons.append(f"budget pressure ({budget.used_pct:.0f}%): T4 is never downgraded")
+    elif risk.critical:
+        reasons.append(f"budget pressure ({budget.used_pct:.0f}%): critical path, no downgrade")
+    elif tier > 0:
+        reasons.append(f"-1: budget pressure (weekly {budget.used_pct:.0f}% >= "
+                       f"{budget.soft_limit_pct:.0f}%)")
+        return tier - 1
+    else:
+        reasons.append("budget pressure: already at T0")
+    return tier
+
+
+def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: list[dict],
+           cfg: Config, conf: float) -> Decision:
+    kind = tc.kind
+    base_name = cfg["class_base"][kind]
+    base = TIERS.index(base_name)
+    max_esc = int(cfg["routing"]["max_escalation"])
+    ceiling = TIERS.index(cfg["routing"]["ceiling_without_critical"])
+    reasons = [f"base {base_name} for {kind}"
+               + (f" (matched {tc.evidence()})" if tc.evidence() else "")
+               + (" [class from LLM]" if tc.source == "llm" else "")]
+
+    ups, downs = _signals(tc, loc, risk)
+    critical_up = any(u.startswith(_CRITICAL_UP) for u in ups)
+    tier = _escalate(base, ups, max_esc, reasons)
+    tier = _descend(tier, downs, kind, critical_up, reasons)
+    _risk_note(kind, risk, ups, downs, reasons)
+
+    # history (learning loop, ccr/history/learn.py)
     from ccr.history import learn
     area = loc.top_area()
-    cap = min(base + max_esc, ceiling)
     on_critical = critical_up or bool(risk.critical)
     low_risk_simple = (not on_critical and tc.scope != "large" and not tc.vague
                        and not tc.hard and not risk.memory_flags
                        and (risk.level == "low"
                             or risk.level == "unknown" and kind not in SUBSTANTIVE))
-    learned = learn.adjust(tier, kind=kind, area=area, records=records, cfg=cfg, cap=cap,
+    learned = learn.adjust(tier, kind=kind, area=area, records=records, cfg=cfg,
+                           cap=min(base + max_esc, ceiling),
                            floor=1 if kind in SUBSTANTIVE else 0, critical=on_critical,
                            low_risk_simple=low_risk_simple)
-    tier, hist_note = learned.tier, learned.note
+    tier = learned.tier
     if learned.reason:
         reasons.append(learned.reason)
 
@@ -335,41 +461,13 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
         reasons.append(f"capped at {TIERS[ceiling]} (T4 needs a critical-path rule)")
         tier = ceiling
 
-    # T4 critical-path rules -------------------------------------------------------------
-    t4: list[str] = []
-    groups = "/".join(risk.critical_groups)
-    if kind == "security" and risk.critical:
-        t4.append(f"security change on a critical path ({groups})")
-    if kind == "migration" and risk.critical and tc.destructive:
-        t4.append(f"destructive migration ({', '.join(tc.destructive[:2])}) on {groups}")
-    if kind in SUBSTANTIVE - {"tests"} and risk.critical_located and \
-            risk.has_memory("critical", "protected"):
-        flag = next(f for f in risk.memory_flags if f.kind in ("critical", "protected"))
-        t4.append(f"memory marks {flag.path} {flag.kind} ('{flag.term}')")
-    if kind in SUBSTANTIVE - {"tests"} and risk.critical_located and tc.scope != "small" and \
-            risk.code_risk >= cfg["risk"]["t4_code_risk"]:
-        t4.append(f"critical path {groups} with code risk {risk.code_risk:.2f}")
-    prod = [t for t in tc.destructive if "prod" in t or "live data" in t]
-    if kind == "migration" and prod and not t4:
-        t4.append(f"destructive migration against production ({', '.join(tc.destructive[:2])})")
+    t4 = _t4_rules(tc, risk, cfg)
     if t4:
         if tier < 4:
             reasons.append(f"T4 rule: {'; '.join(t4)} -> T4")
         tier = 4
 
-    # budget ---------------------------------------------------------------------------
-    if budget.pressure:
-        if t4 or tier >= 4:
-            reasons.append(f"budget pressure ({budget.used_pct:.0f}%): T4 is never downgraded")
-        elif risk.critical:
-            reasons.append(f"budget pressure ({budget.used_pct:.0f}%): critical path, "
-                           f"no downgrade")
-        elif tier > 0:
-            tier -= 1
-            reasons.append(f"-1: budget pressure (weekly {budget.used_pct:.0f}% >= "
-                           f"{budget.soft_limit_pct:.0f}%)")
-        else:
-            reasons.append("budget pressure: already at T0")
+    tier = _under_budget(tier, t4, risk, budget, reasons)
 
     if conf < float(cfg["llm"]["threshold"]) and tier < 4:
         reasons.append(f"low confidence ({conf:.2f}): starting low; escalate one tier "
@@ -378,5 +476,5 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     reasons.append(f"final {t.name}: {t.model}/{t.effort} via {t.agent}")
     return Decision(task_class=tc, location=loc, risk=risk, budget=budget, tier=t,
                     base=base_name, confidence=conf, reasons=reasons, t4_rules=t4,
-                    history=hist_note, area=area,
+                    history=learned.note, area=area,
                     bumps=[u.split(" (")[0] for u in ups])

@@ -17,6 +17,7 @@ from ccr import history as H
 from ccr.hooks import main as hook_main
 from ccr.statusline import main as sl_main
 from conftest import FIX, git_commit_all
+import contextlib
 
 PY = sys.executable
 REPO = Path(__file__).resolve().parents[1]
@@ -347,10 +348,8 @@ def test_bad_stdin_is_silent(name, raw):
 def test_corrupt_graph_is_silent(proj):
     (proj / ".ccr" / "graph.db").write_bytes(b"this is not a sqlite database" * 100)
     for suffix in ("-wal", "-shm"):
-        try:
+        with contextlib.suppress(OSError):
             os.remove(str(proj / ".ccr" / "graph.db") + suffix)
-        except OSError:
-            pass
     assert prompt(proj, "fix the refund rounding bug in the ledger") is None
     out = call("session-start", {"session_id": "s1", "cwd": str(proj)})
     assert "unreadable" in out     # the one place a problem is mentioned (to Claude)

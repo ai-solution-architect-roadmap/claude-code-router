@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+import contextlib
 
 HOOKS = ("session-start", "prompt", "stop")
 DEFAULT_WATCHDOG_S = 1.5
@@ -77,10 +78,8 @@ def main(args: list[str], *, stdin=None, stdout=None, environ=None,
     out = stdout if stdout is not None else sys.stdout
     env = os.environ if environ is None else environ
     if hard_exit:   # real hook process: nothing may ever reach Claude Code's stderr
-        try:
+        with contextlib.suppress(Exception):
             sys.stderr = io.StringIO()
-        except Exception:
-            pass
     result: dict = {}
 
     def work():
@@ -110,10 +109,8 @@ def main(args: list[str], *, stdin=None, stdout=None, environ=None,
     if th.is_alive():
         _log(result.get("root"), f"{name} watchdog {budget * 1000:.0f}ms exceeded")
         if hard_exit:
-            try:
+            with contextlib.suppress(Exception):
                 out.flush()
-            except Exception:
-                pass
             os._exit(0)
         return 0
     ms = (time.perf_counter() - t0) * 1000

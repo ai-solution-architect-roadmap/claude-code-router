@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from ccr.hooks.common import SESSION_TTL_S, read_json, save_session, session_path
+import contextlib
 
 RETRY = re.compile(
     r"\b(?:still\s+(?:fail\w*|broken|wrong|getting|erroring|crash\w*|red|"
@@ -91,10 +92,8 @@ def finalize(root: Path, sid: str | None, session: dict, outcome: str | None,
     pend = session.get("pending")
     if not isinstance(pend, dict):
         return None
-    try:
+    with contextlib.suppress(Exception):   # usage is a nice-to-have on the record
         absorb(session)
-    except Exception:   # noqa: BLE001 - usage is a nice-to-have on the record
-        pass
     from ccr import history as H
     rec = dict(pend)
     rec["ts"] = int(rec.get("ts") or (now or time.time()))
@@ -156,8 +155,6 @@ def sweep(root: Path, current_sid: str | None, now: float | None = None) -> int:
             if age < SESSION_TTL_S:
                 save_session(root, p.stem, data)
         if age >= SESSION_TTL_S:
-            try:
+            with contextlib.suppress(OSError):
                 p.unlink()
-            except OSError:
-                pass
     return n

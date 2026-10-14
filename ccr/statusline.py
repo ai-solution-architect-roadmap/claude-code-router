@@ -11,6 +11,7 @@ Fails open: errors print nothing (or just the wrapped output) and exit 0.
 """
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -18,6 +19,8 @@ import time
 
 MAX_SESSIONS = 16
 WRAP_TIMEOUT_S = 5.0
+
+log = logging.getLogger("ccr.statusline")
 
 
 def _shell_argv(cmd: str) -> list[str] | None:
@@ -114,11 +117,13 @@ def main(args: list[str], *, stdin=None, stdout=None, environ=None) -> int:
         if isinstance(raw, str):
             raw = raw.encode("utf-8")
     except Exception:
+        log.debug("statusline: stdin unreadable", exc_info=True)
         raw = b""
     try:
         if wrap:
             text = run_wrapped(wrap, raw)
     except Exception:
+        log.debug("statusline: wrapped command failed", exc_info=True)
         text = ""
     try:
         from ccr.hooks.common import parse_stdin
@@ -128,11 +133,11 @@ def main(args: list[str], *, stdin=None, stdout=None, environ=None) -> int:
             if not wrap and root is not None:
                 text = line(root, state)
     except Exception:
-        pass
+        log.debug("statusline: record/line failed", exc_info=True)
     if text:
         try:
             out.write(text if text.endswith("\n") else text + "\n")
             out.flush()
         except Exception:
-            pass
+            log.debug("statusline: write failed", exc_info=True)
     return 0

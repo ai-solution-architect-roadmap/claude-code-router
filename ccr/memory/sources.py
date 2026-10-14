@@ -174,9 +174,7 @@ def _rules(d: Path, scope: str, seen: set[Path], ctx: Context) -> Iterator[Memor
 
 
 def _nested_dirs(root: Path) -> Iterator[Path]:
-    visited = 0
-    for dirpath, dirnames, filenames in os.walk(root):
-        visited += 1
+    for visited, (dirpath, dirnames, filenames) in enumerate(os.walk(root), 1):
         if visited > MAX_WALK_DIRS:
             return
         dirnames[:] = sorted(d for d in dirnames

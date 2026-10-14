@@ -8,6 +8,7 @@ consumed). Message text is never returned.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 
 TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens")
@@ -29,7 +30,31 @@ def _int(v) -> int:
     return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
 
 
-def read_usage(path, offset: int = 0, seen: set | None = None,
+def _scan_line(raw: bytes, u: Usage):
+    """Count tool errors on one transcript line into `u`. Returns (message id or None,
+    tokens, cache_read, model) for an assistant message with usage, else None."""
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return None
+    msg = obj.get("message") if isinstance(obj, dict) else None
+    if not isinstance(msg, dict):
+        return None
+    content = msg.get("content")
+    if isinstance(content, list):
+        u.tool_errors += sum(1 for block in content
+                             if isinstance(block, dict) and block.get("type") == "tool_result"
+                             and block.get("is_error") is True)
+    usage = msg.get("usage")
+    if obj.get("type") != "assistant" or not isinstance(usage, dict):
+        return None
+    mid = msg.get("id")
+    model = msg.get("model") if isinstance(msg.get("model"), str) else None
+    return (mid if isinstance(mid, str) else None, sum(_int(usage.get(k)) for k in TOKEN_KEYS),
+            _int(usage.get("cache_read_input_tokens")), model)
+
+
+def read_usage(path: str | os.PathLike, offset: int = 0, seen: set | None = None,
                complete_only: bool = True) -> Usage:
     """Usage in `path` after byte `offset`. `seen` (message ids already counted by an earlier
     incremental call) is updated in place so a message split across reads counts once.
@@ -51,31 +76,14 @@ def read_usage(path, offset: int = 0, seen: set | None = None,
     for raw in data[: end + 1].splitlines():
         if b'"usage"' not in raw and b'"is_error"' not in raw:
             continue
-        try:
-            obj = json.loads(raw)
-        except ValueError:
+        entry = _scan_line(raw, u)
+        if entry is None:
             continue
-        if not isinstance(obj, dict):
-            continue
-        msg = obj.get("message")
-        if not isinstance(msg, dict):
-            continue
-        content = msg.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_result" and \
-                        block.get("is_error") is True:
-                    u.tool_errors += 1
-        usage = msg.get("usage")
-        if obj.get("type") != "assistant" or not isinstance(usage, dict):
-            continue
-        mid = msg.get("id")
-        if not isinstance(mid, str):
+        mid, tokens, cache_read, model = entry
+        if mid is None:
             anon += 1
             mid = f"_anon{offset}_{anon}"
-        tokens = sum(_int(usage.get(k)) for k in TOKEN_KEYS)
-        model = msg.get("model") if isinstance(msg.get("model"), str) else None
-        per_msg[mid] = (tokens, _int(usage.get("cache_read_input_tokens")), model)
+        per_msg[mid] = (tokens, cache_read, model)
         if model and not model.startswith("<"):
             u.model = model
     for mid, (tokens, cache_read, model) in per_msg.items():

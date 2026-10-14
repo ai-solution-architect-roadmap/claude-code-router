@@ -128,6 +128,52 @@ def advice(d, tier, main: str | None, main_effort: str | None, why_iter: str | N
     return out
 
 
+def _retry(d, cfg, pending: dict, session: dict, prompt: str, kind: str, area: str, fact: str):
+    """A retry escalates one tier above the failed attempt (within the ceiling)."""
+    from ccr.config import TIERS
+    prev = pending.get("tier")
+    p = TIERS.index(prev) if prev in TIERS else 0
+    ceiling = 4 if (d.t4_rules or d.risk.critical) else \
+        TIERS.index(cfg["routing"]["ceiling_without_critical"])
+    new = max(d.tier.index, min(p + 1, ceiling))
+    tier = cfg.tier(new)
+    if pending.get("class"):
+        kind = pending["class"]
+    if pending.get("area") and area == "*":
+        area = pending["area"]
+    if session.get("facts") and (not d.location.candidates
+                                 or len(prompt.split()) <= RETRY_REUSE_WORDS):
+        fact = session["facts"]
+    note = (f"Previous attempt ({prev}) did not work: escalated to {tier.name}."
+            if new > p else f"Previous attempt ({prev}) did not work and it is "
+                            f"already the ceiling: re-plan before retrying.")
+    return tier, prev, kind, area, fact, [note]
+
+
+def _record(root, sid, tp, session: dict, pending, d, tier, kind: str, area: str, fact: str,
+            retry: bool, escalated_from, main) -> None:
+    """Close the previous task and start tracking this one in the session file."""
+    from ccr.config import TIERS
+    if tp:
+        session["transcript"] = tp
+        if "offset" not in session:   # first task here: earlier usage is not ours
+            try:
+                session["offset"] = os.path.getsize(tp)
+            except OSError:
+                session["offset"] = 0
+    if pending is not None:          # absorbs the transcript tail, then records it
+        if retry and escalated_from in TIERS and tier.index > TIERS.index(escalated_from):
+            pending["escalated_to"] = tier.name
+        finalize(root, sid, session, "failure" if retry else "success")
+    start(session, {
+        "ts": int(time.time()), "class": kind, "area": area, "tier": tier.name,
+        "model": tier.model, "effort": tier.effort, "risk": d.risk.score,
+        "confidence": d.confidence, "source": "hook", "escalated_from": escalated_from,
+        "main_model": model_alias(main), "trace": d.trace()})
+    session["facts"] = fact
+    save_session(root, sid, session)
+
+
 def run(data: dict, root, cfg) -> str | None:
     if not cfg["hooks"]["route_prompts"]:
         return None
@@ -144,7 +190,6 @@ def run(data: dict, root, cfg) -> str | None:
     g = Graph.open(root)
     if g is None and db_path(root).exists():
         return None                      # unreadable graph: fail open, doctor reports it
-    from ccr.config import TIERS
     from ccr.route import decide
     try:
         d = decide(prompt[:MAX_EVAL_CHARS], root, cfg=cfg, graph=g, transcript_path=tp)
@@ -158,26 +203,11 @@ def run(data: dict, root, cfg) -> str | None:
     if not retry and is_chatter(prompt, d):
         return None                      # "thanks", "yes go on": the current task continues
 
-    tier, escalated_from, notes = d.tier, None, []
     kind, area, fact = d.task_class.kind, d.area, facts(d)
+    tier, escalated_from, notes = d.tier, None, []
     if retry:
-        prev = pending.get("tier")
-        p = TIERS.index(prev) if prev in TIERS else 0
-        ceiling = 4 if (d.t4_rules or d.risk.critical) else \
-            TIERS.index(cfg["routing"]["ceiling_without_critical"])
-        new = max(d.tier.index, min(p + 1, ceiling))
-        tier = cfg.tier(new)
-        escalated_from = prev
-        if pending.get("class"):
-            kind = pending["class"]
-        if pending.get("area") and area == "*":
-            area = pending["area"]
-        if session.get("facts") and (not d.location.candidates
-                                     or len(prompt.split()) <= RETRY_REUSE_WORDS):
-            fact = session["facts"]
-        notes.append(f"Previous attempt ({prev}) did not work: escalated to {tier.name}."
-                     if new > p else f"Previous attempt ({prev}) did not work and it is "
-                                     f"already the ceiling: re-plan before retrying.")
+        tier, escalated_from, kind, area, fact, notes = _retry(
+            d, cfg, pending, session, prompt, kind, area, fact)
     if d.budget.pressure and not retry:
         notes.append(f"Weekly usage {d.budget.used_pct:.0f}%: tier lowered to save quota.")
     if d.confidence < float(cfg["llm"]["threshold"]) and not retry and tier.index < 4:
@@ -192,24 +222,8 @@ def run(data: dict, root, cfg) -> str | None:
         text += " " + " ".join(notes)
 
     try:   # bookkeeping is best effort: the routing line is still worth emitting
-        if tp:
-            session["transcript"] = tp
-            if "offset" not in session:   # first task here: earlier usage is not ours
-                try:
-                    session["offset"] = os.path.getsize(tp)
-                except OSError:
-                    session["offset"] = 0
-        if pending is not None:          # absorbs the transcript tail, then records it
-            if retry and escalated_from in TIERS and tier.index > TIERS.index(escalated_from):
-                pending["escalated_to"] = tier.name
-            finalize(root, sid, session, "failure" if retry else "success")
-        start(session, {
-            "ts": int(time.time()), "class": kind, "area": area, "tier": tier.name,
-            "model": tier.model, "effort": tier.effort, "risk": d.risk.score,
-            "confidence": d.confidence, "source": "hook", "escalated_from": escalated_from,
-            "main_model": model_alias(main), "trace": d.trace()})
-        session["facts"] = fact
-        save_session(root, sid, session)
+        _record(root, sid, tp, session, pending, d, tier, kind, area, fact, retry,
+                escalated_from, main)
     except Exception as e:  # noqa: BLE001
         log(root, f"prompt bookkeeping failed: {e.__class__.__name__}: {e}")
     return Msg(text, ui_line(d, tier, kind, fact, retry))

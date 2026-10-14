@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Optional
 
 import typer
+
+from ccr.doctor import _doctor_history, run_doctor  # noqa: F401 - re-exported
+from ccr.report import format_decision
 
 app = typer.Typer(help="Route Claude Code tasks to the cheapest sufficient model.",
                   no_args_is_help=True, add_completion=False)
@@ -95,7 +96,7 @@ def init(dry_run: bool = typer.Option(False, "--dry-run", help="Print the exact 
                          statusline=not no_statusline, command=command)
     except (SettingsError, InstallError) as e:
         typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     _show_plan(plan, dry_run)
     if dry_run or not plan.changes:
         return
@@ -103,7 +104,7 @@ def init(dry_run: bool = typer.Option(False, "--dry-run", help="Print the exact 
         bdir = apply(plan)
     except (InstallError, OSError) as e:
         typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     if bdir:
         typer.echo(f"  backups in {bdir.relative_to(root)}")
     typer.echo("Done. Start `claude` here; `ccr explain \"<task>\"` previews routing.")
@@ -129,7 +130,7 @@ def profile(path: Path = typer.Argument(Path("."), help="Project root"),
         plan = plan_profile(path, p, local=local)
     except SettingsError as e:
         typer.echo(f"error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     _show_plan(plan, dry_run)
     if plan.changes and not dry_run:
         apply(plan)
@@ -149,44 +150,6 @@ def explain(task: str = typer.Argument(..., help="The task prompt to evaluate"),
         return
     for line in format_decision(task, d):
         typer.echo(line)
-
-
-def format_decision(task: str, d) -> list[str]:
-    from ccr.evaluate.risk import COMPONENTS, LABELS
-    tc, loc, r, b = d.task_class, d.location, d.risk, d.budget
-    short = " ".join(task.split())
-    out = [f"Task:      {short if len(short) <= 100 else short[:97] + '...'}",
-           f"Tier:      {d.tier.name}  {d.tier.model} / {d.tier.effort}  (agent {d.tier.agent})"
-           + ("   [T4 rule]" if d.t4_rules else ""),
-           f"Class:     {tc.kind} ({tc.source}, class confidence {tc.confidence:.2f}"
-           + (f", runner-up {tc.secondary}" if tc.secondary else "") + f")  scope {tc.scope}"
-           + f", vagueness {tc.vagueness:.2f}"
-           + (f", destructive: {', '.join(tc.destructive[:3])}" if tc.destructive else ""),
-           f"Confidence: {d.confidence:.2f} overall"]
-    named = len(loc.explicit)
-    out.append(f"Files:     {len(loc.candidates)} candidate(s), location confidence "
-               f"{loc.confidence:.2f}; {named} named/@-mentioned, {len(loc.symbols)} symbol(s)"
-               + ("" if loc.graph else "  [no code graph]"))
-    for c in loc.candidates[:6]:
-        out.append(f"           {c.confidence:.2f}  {c.path}  ({'; '.join(c.reasons[:3])})")
-    if len(loc.candidates) > 6:
-        out.append(f"           ... {len(loc.candidates) - 6} more")
-    if r.score is None:
-        out.append("Risk:      unknown (nothing located)")
-    else:
-        out.append(f"Risk:      {r.score:.2f} {r.level}  (code-only {r.code_risk:.2f})")
-    for n in COMPONENTS:
-        c = r.components[n]
-        out.append(f"           {LABELS[n]:<15} {c.value:.2f}  {c.detail}")
-    out.append(f"Budget:    {b.detail}" + ("  -> pressure" if b.pressure else ""))
-    out.append(f"Learning:  {d.history}")
-    out.append(f"LLM:       {d.llm}")
-    out.append("Reasoning:")
-    out += [f"  - {x}" for x in d.reasons]
-    for n in d.notes:
-        out.append(f"Note:      {n}")
-    out.append(f"(evaluated in {d.elapsed_ms:.0f} ms; explain runs nothing)")
-    return out
 
 
 @app.command()
@@ -401,151 +364,6 @@ def graph(rebuild: bool = typer.Option(False, "--rebuild", help="Drop and rebuil
 
 def _line(level: str, msg: str) -> None:
     typer.echo(f"  [{level:<4}] {msg}")
-
-
-def run_doctor(root: Path) -> list[tuple[str, str]]:
-    """Return list of (level, message); level in OK/WARN/FAIL/INFO."""
-    out: list[tuple[str, str]] = []
-    exe = shutil.which("claude")
-    if not exe:
-        out.append(("FAIL", "`claude` not found on PATH"))
-    else:
-        try:
-            r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10)
-            ver = (r.stdout or r.stderr).strip() or "unknown version"
-            out.append(("OK", f"claude found at {exe} ({ver})"))
-        except (OSError, subprocess.SubprocessError) as e:
-            out.append(("WARN", f"claude found at {exe} but --version failed: {e}"))
-    if os.environ.get("CLAUDE_CODE_EFFORT_LEVEL"):
-        out.append(("WARN", "CLAUDE_CODE_EFFORT_LEVEL is set; it overrides subagent effort. Unset it."))
-    else:
-        out.append(("OK", "CLAUDE_CODE_EFFORT_LEVEL not set"))
-    settings = root / ".claude" / "settings.json"
-    if not settings.exists():
-        out.append(("INFO", ".claude/settings.json not present"))
-    else:
-        try:
-            data = json.loads(settings.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                raise ValueError("top level is not an object")
-            out.append(("OK", ".claude/settings.json is valid JSON"))
-            hooks = data.get("hooks")
-            if isinstance(hooks, dict) and hooks:
-                text = json.dumps(hooks)
-                if "ccr" in text:
-                    out.append(("OK", f"ccr hooks wired ({', '.join(hooks)})"))
-                else:
-                    out.append(("WARN", "hooks present but none call ccr"))
-            else:
-                out.append(("INFO", "no hooks configured (run `ccr init`)"))
-        except (ValueError, OSError) as e:
-            out.append(("FAIL", f".claude/settings.json is not valid JSON: {e}"))
-    out += _doctor_config(root)
-    out += _doctor_graph(root)
-    out += _doctor_memory(root)
-    out += _doctor_history(root)
-    return out
-
-
-def _doctor_history(root: Path) -> list[tuple[str, str]]:
-    from ccr import history as H
-    p = H.history_path(root)
-    if not p.exists():
-        return [("INFO", ".ccr/history.jsonl not present (created by `ccr init`)")]
-    try:
-        lines = [ln for ln in p.read_text(encoding="utf-8", errors="replace").splitlines()
-                 if ln.strip()]
-    except OSError as e:
-        return [("WARN", f"history unreadable: {e}")]
-    raw = H.read_raw(root)
-    tasks = H.resolve(raw)
-    fb = sum(1 for r in raw if r.get("type") == "feedback")
-    bad = len(lines) - len(raw)
-    dup = len(raw) - fb - len(tasks)
-    msg = (f"history: {len(tasks)} task(s), {fb} feedback record(s)"
-           + (f", {dup} duplicate line(s) ignored" if dup > 0 else "")
-           + (f", {bad} unreadable line(s) skipped" if bad else ""))
-    out = [("OK" if not bad else "INFO", msg)]
-    ga = root / ".gitattributes"
-    try:
-        has_union = "history.jsonl merge=union" in ga.read_text(encoding="utf-8")
-    except OSError:
-        has_union = False
-    if (root / ".git").exists() and not has_union:
-        out.append(("INFO", "no `.ccr/history.jsonl merge=union` in .gitattributes: parallel "
-                            "branches may conflict on history (rerun `ccr init`)"))
-    return out
-
-
-def _doctor_config(root: Path) -> list[tuple[str, str]]:
-    from ccr.config import config_path, load_config
-    cfg = load_config(root)
-    if cfg.path is None:
-        return [("INFO", f"{config_path(root).relative_to(root)} not present (built-in tier "
-                         f"defaults)")]
-    out = [("WARN", f"config: {e}") for e in cfg.errors]
-    out += [("INFO", f"config: {w}") for w in cfg.warnings]
-    if not cfg.errors:
-        t = cfg.tiers
-        out.insert(0, ("OK", "config valid; tiers " + ", ".join(
-            f"{k} {v.model}/{v.effort}" for k, v in t.items())))
-    return out
-
-
-def _doctor_graph(root: Path) -> list[tuple[str, str]]:
-    from ccr.graph import freshness
-    try:
-        f = freshness(root)
-    except Exception as e:  # never let doctor crash on a broken db
-        return [("WARN", f"graph check failed: {e}")]
-    if f["status"] == "missing":
-        return [("INFO", "graph not built yet (run `ccr graph`)")]
-    if f["status"] == "error":
-        return [("WARN", "graph database unreadable (run `ccr graph --rebuild`)")]
-    age = f.get("age_s")
-    age_s = f"{age // 60} min ago" if age is not None and age < 7200 else (
-        f"{age // 3600} h ago" if age is not None else "unknown age")
-    msg = f"graph: {f['files']} files, mode {f['mode']}, built {age_s}"
-    if f["status"] == "fresh":
-        return [("OK", msg + ", fresh")]
-    return [("WARN", msg + ", stale: " + "; ".join(f["reasons"]) + " (run `ccr graph`)")]
-
-
-_MEM_LABELS = {"claude_md": "CLAUDE.md", "claude_local": "CLAUDE.local.md", "rules": "rules",
-               "import": "@imports", "auto_memory": "auto memory", "agent_memory": "agent memory",
-               "mcp_memory": "MCP memory"}
-
-
-def _doctor_memory(root: Path) -> list[tuple[str, str]]:
-    from ccr.memory import collect
-    try:
-        rep = collect(root)
-    except Exception as e:  # collect never raises, but doctor must not either
-        return [("WARN", f"memory check failed: {e}")]
-    out: list[tuple[str, str]] = []
-    if not rep.sources:
-        out.append(("INFO", "no memory sources found (CLAUDE.md, auto memory, agent memory, "
-                            "MCP memory)"))
-    else:
-        groups: dict[str, list] = {}
-        for s in rep.sources:
-            groups.setdefault(s.kind, []).append(s)
-        parts = []
-        for kind, items in groups.items():
-            label = _MEM_LABELS.get(kind, kind)
-            if kind == "agent_memory":
-                parts.append(f"{label} ({len({i.agent for i in items})} agent(s))")
-            elif kind == "mcp_memory":
-                parts.append(f"{label} ({sum(i.entries for i in items)} entries)")
-            else:
-                scopes = sorted({i.scope for i in items})
-                parts.append(f"{label} x{len(items)} ({', '.join(scopes)})")
-        out.append(("OK", f"memory: {len(rep.sources)} source(s): " + "; ".join(parts)))
-        kinds = rep.by_kind()
-        out.append(("INFO", f"memory signals: {len(rep.signals)}" + (
-            " (" + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) + ")" if kinds else "")))
-    out += [("INFO", n) for n in rep.notes]
-    return out
 
 
 @app.command()

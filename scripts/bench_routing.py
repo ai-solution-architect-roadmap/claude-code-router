@@ -1,4 +1,4 @@
-"""Routing benchmark: `uv run python scripts/bench_routing.py [TOKENS_PER_TASK] [--json] [--prompts FILE.json]`.
+"""Routing benchmark: `uv run python scripts/bench_routing.py [TOKENS] [--json] [--prompts FILE.json]`.
 
 Replays a labelled prompt set through the router against the shop_py fixture (no API calls).
 Each prompt carries the lowest tier that should handle it (`need`) and the highest that is not

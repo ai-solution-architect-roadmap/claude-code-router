@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ccr.graph import db as gdb
 from ccr.graph import git as ggit
+import contextlib
 
 
 @dataclass
@@ -67,7 +68,7 @@ def _dir_distance(a: str, b: str) -> int:
     pa, pb = posixpath.dirname(a).split("/"), posixpath.dirname(b).split("/")
     pa, pb = [p for p in pa if p], [p for p in pb if p]
     common = 0
-    for x, y in zip(pa, pb):
+    for x, y in zip(pa, pb, strict=False):
         if x != y:
             break
         common += 1
@@ -319,10 +320,8 @@ def _like(s: str) -> str:
 def _db_bytes(p: Path) -> int:
     total = 0
     for suffix in ("", "-wal"):
-        try:
+        with contextlib.suppress(OSError):
             total += os.path.getsize(str(p) + suffix)
-        except OSError:
-            pass
     return total
 
 
