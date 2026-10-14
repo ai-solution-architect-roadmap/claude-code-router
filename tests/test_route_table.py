@@ -146,3 +146,16 @@ def test_unresolved_path_is_reported(route_env):
     d = _decide(route_env, "shop_py", "Fix the crash in app/nope/missing.py")
     assert d.location.unresolved == ["app/nope/missing.py"]
     assert any("named but not found" in n for n in d.notes)
+
+
+def test_steps_lower_a_plain_task_but_not_a_critical_one(tmp_path):
+    from ccr.route import decide
+    plan = ("Add a flag:\n1. add --dry-run to cli.py\n2. pass it to run()\n3. add a unit test "
+            "for the flag")
+    plain = decide("Add a flag to the cli, add --dry-run, pass it to run, add a unit test",
+                   tmp_path, graph=None, memory=None)
+    stepped = decide(plan, tmp_path, graph=None, memory=None)
+    assert stepped.task_class.steps == 3
+    assert stepped.tier.index <= plain.tier.index
+    assert "trace" in stepped.record() and "steps" in stepped.record()["trace"]
+    assert "prompt" not in str(stepped.record()["trace"]).lower()

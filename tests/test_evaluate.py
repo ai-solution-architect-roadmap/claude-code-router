@@ -188,7 +188,7 @@ class FakeRunner:
         return {"result": self.result, "total_cost_usd": self.cost, "is_error": False}
 
 
-VAGUE = "Clean up the code"
+VAGUE = "Make the code cleaner somehow"
 
 
 def test_llm_never_called_by_default(route_env):
@@ -210,7 +210,7 @@ def test_llm_called_only_below_threshold(route_env):
     assert len(fake.calls) == 1
     call = fake.calls[0]
     assert call["model"] == "haiku" and call["effort"] == "low"
-    assert "Clean up the code" in call["prompt"] and "directories:" in call["prompt"]
+    assert VAGUE in call["prompt"] and "directories:" in call["prompt"]
     assert d.llm_used and d.task_class.source == "llm"
     assert "scope unspecified -> large" in d.llm and "files +app/core/engine.py" in d.llm
     assert "[~$0.0012]" in d.llm
@@ -352,3 +352,21 @@ def test_in_this_session_does_not_put_a_task_on_the_auth_path(route_env):
                    memory=memory, history_records=[], now=0)
     assert d.risk.critical_terms == [] and "auth" not in d.risk.critical_groups
     assert d.tier.name == "T1"
+
+
+def test_length_is_not_a_signal():
+    assert classify("make it work").vagueness == classify("make it work " + "x" * 5).vagueness
+    short = classify("Fix KeyError in `Engine.run`", located=True)
+    long = classify("Fix KeyError in `Engine.run`, which people in the team have been seeing "
+                    "since last week when they run it with the new config", located=True)
+    assert short.vagueness == long.vagueness == 0.0
+
+
+def test_explicit_steps_are_detected():
+    numbered = classify("Add a flag:\n1. add --dry-run to cli.py\n2. pass it to run()\n"
+                        "3. add a test")
+    assert numbered.steps == 3
+    chain = classify("First add the flag, then pass it to run, finally add a test")
+    assert chain.steps == 3
+    assert classify("Add a dry-run flag, then test it").steps == 0   # too few to be a plan
+    assert classify("Add a dry-run flag").steps == 0

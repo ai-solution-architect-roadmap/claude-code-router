@@ -31,7 +31,9 @@ FIELDS = ("id", "type", "ref", "feedback",
           # `ccr run` attempts: grouping, failure reason code, usage breakdown, per-model
           # usage ({model id: {tokens, cost_usd}}), test command result
           "run_id", "attempt", "reason", "subtype", "exit_code", "usage", "models",
-          "duration_ms", "test", "forced", "assist_cost_usd")
+          "duration_ms", "test", "forced", "assist_cost_usd",
+          # routing signals behind the decision (Decision.trace(): no prompt text)
+          "trace")
 OUTCOMES = ("success", "failure", "escalated", "abandoned", "error")
 SUCCESS = {"success"}
 FAILURE = {"failure", "escalated"}

@@ -207,7 +207,7 @@ def run(data: dict, root, cfg) -> str | None:
             "ts": int(time.time()), "class": kind, "area": area, "tier": tier.name,
             "model": tier.model, "effort": tier.effort, "risk": d.risk.score,
             "confidence": d.confidence, "source": "hook", "escalated_from": escalated_from,
-            "main_model": model_alias(main)})
+            "main_model": model_alias(main), "trace": d.trace()})
         session["facts"] = fact
         save_session(root, sid, session)
     except Exception as e:  # noqa: BLE001

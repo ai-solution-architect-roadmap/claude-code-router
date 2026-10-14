@@ -52,7 +52,21 @@ class Decision:
         return {"class": self.task_class.kind, "area": self.area, "tier": self.tier.name,
                 "model": self.tier.model, "effort": self.tier.effort,
                 "risk": self.risk.score, "confidence": self.confidence,
-                "source": "llm" if self.llm_used else "rules"}
+                "source": "llm" if self.llm_used else "rules", "trace": self.trace()}
+
+    def trace(self) -> dict:
+        """Compact signals behind this decision, for tuning the rules from real data.
+        Numbers, flags and rule names only: no prompt text, no file paths."""
+        tc, r = self.task_class, self.risk
+        return {"base": self.base, "scope": tc.scope, "vagueness": tc.vagueness,
+                "steps": tc.steps, "class_conf": tc.confidence, "secondary": tc.secondary,
+                "class_source": tc.source, "destructive": bool(tc.destructive),
+                "hard": bool(tc.hard), "located": self.location.located,
+                "loc_conf": self.location.confidence, "risk_level": r.level,
+                "code_risk": r.code_risk, "critical": r.critical_groups,
+                "memory_flags": sorted({f.kind for f in r.memory_flags}),
+                "t4": bool(self.t4_rules), "budget_pressure": bool(self.budget.pressure),
+                "elapsed_ms": round(self.elapsed_ms, 1)}
 
     def to_dict(self) -> dict:
         tc, loc, r, b = self.task_class, self.location, self.risk, self.budget
@@ -61,7 +75,7 @@ class Decision:
             "agent": self.tier.agent, "base": self.base, "confidence": self.confidence,
             "class": {"kind": tc.kind, "confidence": tc.confidence, "source": tc.source,
                       "secondary": tc.secondary, "scope": tc.scope,
-                      "vagueness": tc.vagueness, "evidence": tc.matched.get(tc.kind, []),
+                      "steps": tc.steps, "vagueness": tc.vagueness, "evidence": tc.matched.get(tc.kind, []),
                       "destructive": tc.destructive, "hard": tc.hard},
             "location": {"confidence": loc.confidence, "explicit": loc.explicit,
                          "mentioned": loc.mentioned, "unresolved": loc.unresolved,
@@ -208,6 +222,9 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
         ups.append(f"large scope ({', '.join(tc.scope_terms[:3]) or 'LLM'})")
     if tc.scope == "small" and kind in SUBSTANTIVE - {"migration", "security", "debugging"}:
         downs.append(f"small scope ({', '.join(tc.scope_terms[:3]) or 'LLM'})")
+    if tc.steps and kind in SUBSTANTIVE - {"migration", "security", "debugging"} \
+            and not tc.destructive:
+        downs.append(f"explicit step-by-step instructions ({tc.steps} steps)")
     if tc.vague and kind == "bugfix":
         ups.append(f"vague bug report (vagueness {tc.vagueness:.2f}): needs exploration")
     if tc.hard and kind in ("perf", "bugfix"):

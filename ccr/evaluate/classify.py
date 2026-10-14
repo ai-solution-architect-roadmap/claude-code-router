@@ -133,6 +133,20 @@ VAGUE = re.compile(
     r"\b(?:something|somehow|stuff|things|whatever|etc|better|improve|nicer|cleaner|properly|"
     r"make\s+it\s+work|doesn'?t\s+work|not\s+working|weird|some\s+issues?|"
     r"the\s+code|the\s+app|fix\s+it|look\s+into)\b", _I)
+# explicit step-by-step instructions: the user already did the planning, so the work is
+# execution, not exploration. Numbered/"step N" lines, or a first ... then ... finally chain.
+STEP_LINE = re.compile(r"^\s*(?:\(?\d{1,2}[.):]|step\s*\d{1,2}\b)", _I | re.M)
+STEP_WORDS = re.compile(r"\b(?:first(?:ly)?|then|next|after\s+that|finally|lastly)\b", _I)
+MIN_STEPS = 3
+
+
+def count_steps(text: str) -> int:
+    """Number of explicit steps in the prompt (0 when it is not a step-by-step list)."""
+    n = len(STEP_LINE.findall(text))
+    if n < MIN_STEPS:
+        found = [w.lower() for w in STEP_WORDS.findall(text)]
+        n = len(found) if found and found[0].startswith("first") else 0
+    return n if n >= MIN_STEPS else 0
 
 
 @dataclass
@@ -144,6 +158,7 @@ class TaskClass:
     secondary: str | None = None
     scope: str = "unspecified"           # small | medium | large | unspecified
     scope_terms: list[str] = field(default_factory=list)
+    steps: int = 0                       # explicit step-by-step instructions given (0 = none)
     vagueness: float = 0.0
     vague_terms: list[str] = field(default_factory=list)
     destructive: list[str] = field(default_factory=list)
@@ -220,9 +235,10 @@ def classify(task: str, located: bool | None = None) -> TaskClass:
     scope = ("medium" if large and small else "large" if large else "small" if small
              else "unspecified")
 
-    v, vterms = _vagueness(raw, body, located)
+    steps = count_steps(core)
+    v, vterms = _vagueness(raw, body, located, steps)
     return TaskClass(kind=kind, confidence=round(conf, 3), scores=scores, matched=matched,
-                     secondary=secondary, scope=scope, scope_terms=large + small,
+                     secondary=secondary, scope=scope, scope_terms=large + small, steps=steps,
                      vagueness=v, vague_terms=vterms, destructive=_hits(DESTRUCTIVE, body),
                      hard=hard)
 
@@ -232,19 +248,19 @@ _PRIORITY = ["question", "trivial", "tests", "bugfix", "feature", "refactor", "p
              "migration", "debugging", "security"]
 
 
-def _vagueness(raw: str, body: str, located: bool | None) -> tuple[float, list[str]]:
+def _vagueness(raw: str, body: str, located: bool | None,
+               steps: int = 0) -> tuple[float, list[str]]:
     v = 0.0
     terms = _hits(VAGUE, body)
-    content = T.content_words(raw)
-    if len(content) <= 2:
-        v += 0.3
-    elif len(content) <= 5:
-        v += 0.1
+    # prompt length is deliberately not a signal: a terse prompt can be huge work and a long
+    # one can be a trivial edit. Vagueness comes from vague wording and missing specifics.
     v += min(0.45, 0.15 * len(terms))
     ats, paths = T.path_tokens(raw)
     specifics = len(ats) + len(paths) + len(T.identifiers(raw))
     specifics += len(T.QUOTED_RX.findall(raw)) + len(re.findall(r"\b\d+\b", raw)) // 2
     v -= min(0.5, 0.25 * specifics)
+    if steps:
+        v -= 0.3
     if located is False:
         v += 0.3
     elif located:
