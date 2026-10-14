@@ -287,8 +287,10 @@ def run(task: Optional[str] = typer.Argument(None, help="The task; `-` or omitte
 def stats(as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
           days: Optional[float] = typer.Option(None, "--days", min=0.01,
                                                help="Only the last N days"),
+          misroutes: bool = typer.Option(False, "--misroutes",
+                                         help="List each over- and under-routed task"),
           path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
-    """Show usage, tier distribution, success and escalation rates.
+    """Show usage, estimated savings, misroutes, tier distribution, success and escalation.
 
     Per tier, area and task class, plus what the learning loop does with the history."""
     from ccr import history as H
@@ -300,7 +302,7 @@ def stats(as_json: bool = typer.Option(False, "--json", help="Machine-readable o
     if as_json:
         typer.echo(json.dumps(s, indent=2))
         return
-    for line in format_text(s, root):
+    for line in format_text(s, root, detail=misroutes):
         typer.echo(line)
 
 

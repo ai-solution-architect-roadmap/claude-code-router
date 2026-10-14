@@ -178,6 +178,10 @@ critical_terms:              # prompt words/phrases (whole words, simple plurals
   payments: [payment, billing, refund, stripe, ledger, ...]
   # ... migrations, infra, secrets
 
+hard_terms: []               # your words for "hard" (like "intermittent"): [cache warm, herd]
+pricing:                     # blended USD per Mtok, only for the `ccr stats` savings estimate
+  {haiku: 2.0, sonnet: 6.0, opus: 30.0}
+
 risk:
   weights: {blast_radius: 0.6, complexity: 0.5, test_proximity: 0.3, churn: 0.3,
             critical_path: 0.7, memory: 0.7}       # noisy-or contributions
@@ -352,7 +356,7 @@ including a `claude --resume <session>` hint, go to stderr.
 ccr feedback               # show the last routed task
 ccr feedback bad           # it did not work (counts as a failure of its tier)
 ccr feedback good --id 9cef  # target a specific task by id prefix
-ccr stats [--json] [--days 30]
+ccr stats [--json] [--days 30] [--misroutes]
 ```
 
 `ccr feedback` targets the newest task. That can be a `ccr run` attempt, a finished
@@ -381,6 +385,31 @@ Per task class:
 Learning (what routing does with this history):
   up      bugfix in app/api: T1 failed 3/3 -> start at T2
 ```
+
+`ccr stats` also prints two lines that answer "is the router paying off?":
+
+```
+Savings:   est. $10.20 routed vs $18.00 all-Opus (43% saved) and $3.60 all-Sonnet (-183%) ...
+Misroutes: over-routed 2/40 (5%, a cheaper tier had a proven record), under-routed 3/40 (8%, failed or escalated)
+  tune: 2/3 bugfix task(s) failed at T1 with no hard or escalation signal: add project words ...
+```
+
+- **Savings** prices each task's tokens at its tier's model (`pricing:`) and again at an
+  all-Opus and all-Sonnet baseline. It is an estimate: it assumes the stronger model would
+  use the same tokens, so it ignores rework a stronger model might save. A negative saving
+  against all-Sonnet is shown, not hidden. Read it next to the success rate.
+- **Over-routed**: the task succeeded above the class floor while the tier below has a
+  proven record (`min_samples`, `success_rate_down`) for that class x area.
+- **Under-routed**: the task failed or was escalated at the tier it got.
+- `--misroutes` lists each one with the rules that fired, from the `trace` in the history
+  record (cue words from the built-in rules, the `hard_terms` that matched, and which +1
+  signals fired; never the prompt text). The `tune:` lines say which rule to adjust. They
+  only suggest: ccr never edits its own rules.
+
+`uv run python scripts/bench_routing.py` replays a labelled prompt set (terse but huge,
+long but trivial, "fix login sometimes failing", ...) and reports under- and over-routed
+prompts and the estimated cost against the baselines, without API calls. Edit `PROMPTS` to
+your own work.
 
 How the columns are computed:
 

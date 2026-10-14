@@ -71,6 +71,12 @@ DEFAULTS: dict = {
         "secrets": ["secret", "encryption", "crypto", "certificate", "tls", "api key",
                     "private key", "signing key"],
     },
+    # Project words that make a bug/perf task a hard problem (like "intermittent"): added to
+    # the built-in list in ccr/evaluate/classify.py. Matched as whole words, case-insensitive.
+    "hard_terms": [],
+    # Blended USD per million tokens by model family, only used for the savings estimate in
+    # `ccr stats` (interactive sessions report tokens, not dollars). Set your own rates.
+    "pricing": {"haiku": 2.0, "sonnet": 6.0, "opus": 30.0},
     "risk": {
         # Max contribution of each component to the (noisy-or) risk score.
         "weights": {"blast_radius": 0.6, "complexity": 0.5, "test_proximity": 0.3,
@@ -288,6 +294,21 @@ def _merge_validated(cfg: Config, raw: dict) -> None:
             if _str_list(cfg, f"{key}.{g}", items):
                 d[key][str(g)] = [x.strip() if key == "critical_paths" else x.strip().lower()
                                   for x in items]
+
+    ht = raw.get("hard_terms")
+    if ht is not None:
+        if ht is None or _str_list(cfg, "hard_terms", ht):
+            d["hard_terms"] = [x.strip().lower() for x in ht if x.strip()]
+    pricing = raw.get("pricing")
+    if pricing is not None:
+        if not isinstance(pricing, dict):
+            cfg.errors.append("pricing: expected a mapping of model -> USD per Mtok")
+        else:
+            for k, v in pricing.items():
+                if k not in DEFAULTS["pricing"]:
+                    cfg.warnings.append(f"pricing.{k}: unknown model ignored")
+                elif _num(cfg, f"pricing.{k}", v, 0, 100_000):
+                    d["pricing"][k] = float(v)
 
     risk = raw.get("risk")
     if risk is not None:

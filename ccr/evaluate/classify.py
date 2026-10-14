@@ -67,6 +67,9 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"\s+(?:to|into)|move\s+from\s+\w+\s+to|switch\s+(?:from|over)|"
                     r"schema\s+changes?|alter\s+table|alembic|backfill\w*|deprecat\w*)\b",
                     _I), 3.5),
+        # dropping schema objects is a migration even without the word
+        (re.compile(r"\b(?:drop|truncate)\s+(?:the\s+)?(?:[\w.]+\s+){0,3}?"
+                    r"(?:columns?|tables?|databases?|schemas?)\b", _I), 3.5),
     ],
     "security": [
         (re.compile(r"\b(?:security|secure|insecure|vulnerab\w*|cve-?\d*|exploit\w*|xss|csrf|"
@@ -173,6 +176,11 @@ class TaskClass:
     def vague(self) -> bool:
         return self.vagueness >= 0.6
 
+    def evidence_terms(self) -> list[str]:
+        """Matched cue words for the chosen class, for the history trace: short rule
+        vocabulary only (at most 4 terms of 24 characters)."""
+        return [t for t in (self.matched.get(self.kind) or []) if len(t) <= 24][:4]
+
     def evidence(self, kind: str | None = None) -> str:
         terms = self.matched.get(kind or self.kind) or []
         return ", ".join(f"'{t}'" for t in terms[:4])
@@ -187,8 +195,15 @@ def _hits(rx: re.Pattern, text: str) -> list[str]:
     return seen
 
 
-def classify(task: str, located: bool | None = None) -> TaskClass:
-    """Classify a task prompt. `located`: whether code was located (feeds vagueness)."""
+def _extra_hard(terms: list[str]) -> re.Pattern | None:
+    words = [re.escape(t).replace(r"\ ", r"\s+") for t in terms if t]
+    return re.compile(r"\b(?:" + "|".join(words) + r")s?\b", _I) if words else None
+
+
+def classify(task: str, located: bool | None = None,
+             hard_terms: list[str] | None = None) -> TaskClass:
+    """Classify a task prompt. `located`: whether code was located (feeds vagueness).
+    `hard_terms`: project words (config `hard_terms`) that count like "intermittent"."""
     raw = task.strip()
     core = _POLITE.sub("", raw, count=1)
     body = T.strip_refs(core)
@@ -215,6 +230,9 @@ def classify(task: str, located: bool | None = None) -> TaskClass:
             break
     # concurrency / leak bugs are hard-to-diagnose bugs, not routine fixes
     hard = _hits(HARD, body)
+    extra = _extra_hard(hard_terms or [])
+    if extra:
+        hard += [h for h in _hits(extra, body) if h not in hard]
     if hard and ("bugfix" in scores or "debugging" in scores):
         scores["debugging"] = scores.get("debugging", 0.0) + 1.5
         matched.setdefault("debugging", []).extend(h for h in hard

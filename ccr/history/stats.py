@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from ccr.config import TIERS
+from ccr.history import savings
 from ccr.history.learn import FAILURE, SUCCESS, summarize
 
 
@@ -93,6 +94,8 @@ def compute(records: list[dict], cfg) -> dict:
         "areas": {k: _finish(v) for k, v in sorted(by_area.items())},
         "classes": {k: _finish(v) for k, v in sorted(by_class.items())},
         "learning": summarize(tasks, cfg),
+        "savings": savings.estimate(tasks, cfg),
+        "misroutes": savings.misroutes(tasks, cfg),
     }
 
 
@@ -118,7 +121,7 @@ def _table(title: str, rows: dict, key_w: int, with_tiers: bool) -> list[str]:
     return out
 
 
-def format_text(s: dict, root=None, when=None) -> list[str]:
+def format_text(s: dict, root=None, when=None, detail: bool = False) -> list[str]:
     import time
     fmt = (lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))) if when is None \
         else when
@@ -139,6 +142,7 @@ def format_text(s: dict, root=None, when=None) -> list[str]:
     out.append(f"Outcomes:  {o['success']} ok, {o['failure']} failed, {o['unknown']} unknown; "
                f"success {_pct(o['success_rate'])}, escalated {o['escalated']} "
                f"({_pct(o['escalation_rate'])})")
+    out += savings.format_lines(s["savings"], s["misroutes"], detail)
     out.append("Tier distribution: " + "  ".join(
         f"{t} {b['tasks']} ({_pct(b['share'])})" for t, b in s["tiers"].items()))
     out.append("Per tier:")

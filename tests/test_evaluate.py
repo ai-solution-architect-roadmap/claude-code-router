@@ -378,3 +378,42 @@ def test_explicit_steps_are_detected():
 def test_intermittent_wording_is_a_hard_problem(task):
     assert classify(task).hard
     assert not classify("fix the login redirect").hard
+
+
+def _decide(route_env, repo, task):
+    return _route(route_env, repo, task, [])
+
+
+def test_project_hard_terms_count_like_intermittent():
+    assert not classify("fix the sync flow").hard
+    tc = classify("fix the sync flow when the cache warms", hard_terms=["cache warms"])
+    assert tc.hard == ["cache warms"] and tc.kind in ("bugfix", "debugging")
+    assert classify("fix the thundering herd", hard_terms=["thundering herd"]).hard
+
+
+def test_login_sometimes_failing_routes_to_the_deep_tier(route_env):
+    d = _decide(route_env, "shop_py", "fix login sometimes failing")
+    assert d.tier.name == "T3", d.reasons
+
+
+def test_dropping_a_column_in_production_is_a_critical_migration(route_env):
+    d = _decide(route_env, "shop_py",
+                "drop the legacy_id column from the users table in production")
+    assert d.task_class.kind == "migration" and d.tier.name == "T4", d.reasons
+
+
+def test_terse_unclassified_task_on_impactful_code_goes_up(route_env):
+    quiet = _decide(route_env, "shop_py", "tweak app/reports/export.py")
+    wide = _decide(route_env, "shop_py", "tweak app/utils/strings.py")
+    assert quiet.tier.name == "T2" and not quiet.bumps
+    assert wide.tier.name == "T3" and wide.bumps == ["unclassified task on impactful code"]
+    # a cue word or an explicit plan means the prompt did say how hard it is
+    assert not any("unclassified" in r for r in
+                   _decide(route_env, "shop_py", "add a flag to app/utils/strings.py").reasons)
+
+
+def test_trace_carries_the_rules_that_fired(route_env):
+    d = _decide(route_env, "shop_py", "fix login sometimes failing")
+    tr = d.trace()
+    assert "fix" in tr["rules"] and tr["hard_terms"] == ["sometimes"]
+    assert any(b.startswith("hard problem") for b in tr["bumps"])

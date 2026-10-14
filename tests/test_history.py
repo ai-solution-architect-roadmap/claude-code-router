@@ -315,3 +315,86 @@ def test_doctor_reports_history_health(tmp_path):
     (msg,) = [m for _, m in _doctor_history(tmp_path)]
     assert msg == ("history: 1 task(s), 1 feedback record(s), 1 duplicate line(s) ignored, "
                    "1 unreadable line(s) skipped")
+
+
+# ------------------------------------------------------------ savings and misroutes
+from ccr.history import savings  # noqa: E402
+
+
+def _t(tier, outcome, kind="bugfix", area="app/api", tokens=1000, **kw):
+    return {"id": f"{tier}{outcome}{kind}{area}{kw}", "class": kind, "area": area,
+            "tier": tier, "outcome": outcome, "tokens": tokens, **kw}
+
+
+def test_savings_estimate_prices_tokens_per_tier_against_baselines():
+    cfg = default_config()
+    est = savings.estimate([_t("T0", "success", tokens=1_000_000),
+                            _t("T3", "success", tokens=1_000_000)], cfg)
+    assert est["routed_usd"] == pytest.approx(2.0 + 30.0)
+    assert est["all_opus_usd"] == 60.0 and est["saved_vs_opus"] == pytest.approx(0.467, abs=1e-3)
+    assert est["all_sonnet_usd"] == 12.0 and est["saved_vs_sonnet"] < 0   # honest: costlier
+    assert savings.estimate([_t("T1", "success", tokens=0)], cfg)["saved_vs_opus"] is None
+
+
+def test_pricing_and_hard_terms_are_configurable(tmp_path):
+    from ccr.config import load_config
+    (tmp_path / ".ccr").mkdir()
+    (tmp_path / ".ccr" / "config.yaml").write_text(
+        "pricing:\n  opus: 50\n  gpt: 1\nhard_terms: [Cache Warm]\n")
+    cfg = load_config(tmp_path)
+    assert cfg["pricing"]["opus"] == 50.0 and cfg["hard_terms"] == ["cache warm"]
+    assert any("pricing.gpt" in w for w in cfg.warnings)
+
+
+def test_overspend_needs_a_proven_cheaper_tier():
+    recs = [_t("T1", "success", kind="feature", id=i) for i in range(3)]   # T1 proven
+    recs.append(_t("T2", "success", kind="feature", id="x"))
+    m = savings.misroutes(recs, default_config())
+    assert m["over"] == 1 and m["under"] == 0 and m["decided"] == 4
+    assert m["items"][0]["kind"] == "over" and "T1 succeeded 3/3" in m["items"][0]["why"]
+    # one lucky cheap success is not proof
+    assert savings.misroutes([_t("T1", "success", kind="feature"),
+                              _t("T2", "success", kind="feature", id="y")],
+                             default_config())["over"] == 0
+    # nothing is "over" at the class floor
+    assert savings.misroutes([_t("T1", "success", id=i) for i in range(5)],
+                             default_config())["over"] == 0
+
+
+def test_underrouted_failures_become_tuning_suggestions():
+    trace = {"rules": [], "hard": False, "bumps": [], "class_conf": 0.15}
+    recs = [_t("T1", "failure", id=i, trace=trace) for i in range(2)]
+    recs.append(_t("T1", "escalated", id="e", trace={**trace, "rules": ["fix"]}))
+    m = savings.misroutes(recs, default_config())
+    assert m["under"] == 3 and m["under_rate"] == 1.0
+    text = " | ".join(m["suggestions"])
+    assert "2/3 bugfix task(s) failed at T1 with no cue word" in text
+    assert "hard_terms" in text
+    old = savings.misroutes([_t("T1", "failure")], default_config())
+    assert "no routing trace" in old["suggestions"][0]
+
+
+def test_stats_reports_savings_and_misroutes_in_text_and_cli(tmp_path):
+    for r in [*(_t("T1", "success", kind="feature", id=i) for i in range(3)),
+              _t("T2", "success", kind="feature", id="x"),
+              _t("T1", "failure", id="f", trace={"rules": [], "hard": False, "bumps": []})]:
+        H.append(tmp_path, {**r, "ts": 1})
+    out = cli.invoke(app, ["stats", "--path", str(tmp_path)]).output
+    assert "Savings:" in out and "Misroutes: over-routed 1/5" in out and "tune:" in out
+    detail = cli.invoke(app, ["stats", "--misroutes", "--path", str(tmp_path)]).output
+    assert " over  T2 feature" in detail and " under T1 bugfix" in detail
+    js = json.loads(cli.invoke(app, ["stats", "--json", "--path", str(tmp_path)]).output)
+    assert js["misroutes"]["over"] == 1 and js["savings"]["tasks"] == 5
+
+
+def test_bench_routing_replay_has_no_underrouted_prompts():
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[1] / "scripts" / "bench_routing.py"
+    spec = importlib.util.spec_from_file_location("bench_routing", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    out = mod.replay(mod.setup())
+    assert out["under"] == 0 and out["over"] == 0, [r for r in out["rows"]
+                                                    if r["under"] or r["over"]]
+    assert out["estimate"]["saved_vs_opus"] > 0.2

@@ -27,6 +27,7 @@ CHANGE = {"trivial", "tests", "bugfix", "feature", "refactor", "perf", "migratio
           "debugging"}
 SUBSTANTIVE = CHANGE - {"trivial"}
 DEEP_COMPLEXITY = 0.6    # complexity component at which code counts as hard to change
+UNSURE_CLASS = 0.4       # class confidence below this, with no cue words, is a guess
 DEEP_SUPPORT = 0.4       # blast radius / missing-test level that makes complex code risky
 _AUTO = object()
 
@@ -47,6 +48,7 @@ class Decision:
     llm_used: bool = False
     area: str = "*"
     notes: list[str] = field(default_factory=list)
+    bumps: list[str] = field(default_factory=list)   # names of the +1 signals that fired
     elapsed_ms: float = 0.0
 
     def record(self) -> dict:
@@ -63,7 +65,8 @@ class Decision:
         return {"base": self.base, "scope": tc.scope, "vagueness": tc.vagueness,
                 "steps": tc.steps, "class_conf": tc.confidence, "secondary": tc.secondary,
                 "class_source": tc.source, "destructive": bool(tc.destructive),
-                "hard": bool(tc.hard), "located": self.location.located,
+                "hard": bool(tc.hard), "rules": tc.evidence_terms(), "hard_terms": tc.hard[:3],
+                "bumps": self.bumps, "located": self.location.located,
                 "loc_conf": self.location.confidence, "risk_level": r.level,
                 "code_risk": r.code_risk, "critical": r.critical_groups,
                 "memory_flags": sorted({f.kind for f in r.memory_flags}),
@@ -128,7 +131,7 @@ def decide(task: str, root: str | Path = ".", *, cfg: Config | None = None,
         memory = collect(root, nested=nested_memory)
     try:
         loc = locate(task, root, graph, memory)
-        tc = classify(task, located=loc.located)
+        tc = classify(task, located=loc.located, hard_terms=cfg["hard_terms"])
         risk = assess_risk(loc, task, cfg, graph, memory)
         conf = overall_confidence(tc, loc)
         llm_status, llm_used = "not requested", False
@@ -224,6 +227,17 @@ def _deep_code(risk: Risk) -> str | None:
     return ", ".join(why)
 
 
+def _impactful(risk: Risk) -> str | None:
+    """Why the located code is costly to get wrong (complex or widely depended on)."""
+    c = risk.components
+    cx, br = (c[n].value if n in c else 0.0 for n in ("complexity", "blast_radius"))
+    if cx >= DEEP_COMPLEXITY:
+        return f"complexity {cx:.2f}"
+    if br >= DEEP_SUPPORT:
+        return f"blast radius {br:.2f}"
+    return None
+
+
 def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: list[dict],
            cfg: Config, conf: float) -> Decision:
     kind = tc.kind
@@ -254,6 +268,10 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
         ups.append(f"complex code ({deep})")
     elif risk.level == "high" and kind in SUBSTANTIVE:
         ups.append(f"risk high ({risk.score:.2f})")
+    elif kind in SUBSTANTIVE and not tc.evidence_terms() and tc.confidence < UNSURE_CLASS \
+            and not tc.steps and loc.located and _impactful(risk):
+        # a terse prompt with no cue words says nothing about difficulty: let the code decide
+        ups.append(f"unclassified task on impactful code ({_impactful(risk)})")
     if kind in SUBSTANTIVE and risk.critical or kind == "trivial" and risk.critical_located:
         ups.append(f"critical path ({'/'.join(risk.critical_groups)})")
     if kind in CHANGE and risk.has_memory("critical", "protected", "fragile"):
@@ -265,8 +283,13 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     if ups and max_esc <= 0:
         reasons.append("escalation disabled (routing.max_escalation 0): " + "; ".join(ups))
     elif ups:
-        # one tier normally; two when three or more independent signals agree
-        step = 2 if len(ups) >= 3 and max_esc >= 2 else 1
+        # one tier normally; two when three or more independent signals agree, or when a
+        # critical path meets a difficulty signal from the wording (a hard bug in auth code
+        # is not a T2 job). Risk and critical path both come from the code, so they don't
+        # count as two opinions.
+        crit = any(u.startswith(("critical path", "memory flags")) for u in ups)
+        wording = any(u.startswith(("hard problem", "vague bug", "large scope")) for u in ups)
+        step = 2 if (len(ups) >= 3 or crit and wording) and max_esc >= 2 else 1
         tier += step
         reasons.append(f"+{step}: " + "; ".join(ups)
                        + (" (escalation capped at one tier)" if len(ups) > 1 and step == 1
@@ -326,6 +349,9 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     if kind in SUBSTANTIVE - {"tests"} and risk.critical_located and tc.scope != "small" and \
             risk.code_risk >= cfg["risk"]["t4_code_risk"]:
         t4.append(f"critical path {groups} with code risk {risk.code_risk:.2f}")
+    prod = [t for t in tc.destructive if "prod" in t or "live data" in t]
+    if kind == "migration" and prod and not t4:
+        t4.append(f"destructive migration against production ({', '.join(tc.destructive[:2])})")
     if t4:
         if tier < 4:
             reasons.append(f"T4 rule: {'; '.join(t4)} -> T4")
@@ -352,4 +378,5 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     reasons.append(f"final {t.name}: {t.model}/{t.effort} via {t.agent}")
     return Decision(task_class=tc, location=loc, risk=risk, budget=budget, tier=t,
                     base=base_name, confidence=conf, reasons=reasons, t4_rules=t4,
-                    history=hist_note, area=area)
+                    history=hist_note, area=area,
+                    bumps=[u.split(" (")[0] for u in ups])
