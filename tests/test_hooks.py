@@ -3,6 +3,7 @@ token accounting, fail-open fault injection, import hygiene and latency."""
 import io
 import json
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -59,6 +60,12 @@ def prompt(root, text, sid="s1", **extra):
     return obj["hookSpecificOutput"]["additionalContext"]
 
 
+def ui_msg(root, text, sid="s1"):
+    out = call("prompt", {"session_id": sid, "cwd": str(root), "prompt": text,
+                          "transcript_path": str(root / "none.jsonl")})
+    return json.loads(out) if out else None
+
+
 def set_main_model(root, sid, model, effort="low"):
     p = root / ".ccr" / "local" / "state.json"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +91,34 @@ def test_prompt_injects_routing_line(proj):
     assert "Delegate implementation to ccr-" in ctx and "Explore (haiku)" in ctx
     q = prompt(proj, "where is the pagination helper defined?", sid="s9")
     assert q.startswith("ccr: T0 (haiku/low)") and "Answer directly" in q
+
+
+def test_prompt_shows_decision_in_ui(proj):
+    obj = ui_msg(proj, "fix the refund rounding bug in app/payments/ledger.py")
+    assert set(obj) == {"hookSpecificOutput", "systemMessage"}
+    assert obj["hookSpecificOutput"]["additionalContext"].startswith("ccr: T")
+    msg = obj["systemMessage"]
+    assert re.fullmatch(r"ccr → T\d (haiku|sonnet|opus|fable)/\w+ · ccr-[a-z]+ · .+", msg), msg
+    assert "\n" not in msg and len(msg) < 120
+
+
+def test_show_in_ui_off_keeps_model_context_only(proj):
+    (proj / ".ccr" / "config.yaml").write_text("hooks:\n  show_in_ui: false\n")
+    obj = ui_msg(proj, "fix the refund rounding bug in app/payments/ledger.py")
+    assert set(obj) == {"hookSpecificOutput"}
+    assert (proj / ".ccr" / "config.yaml").exists()
+    out = call("session-start", {"session_id": "s1", "cwd": str(proj)})
+    assert "systemMessage" not in json.loads(out)
+
+
+def test_ui_message_silent_cases_stay_silent(proj):
+    assert ui_msg(proj, "thanks") is None
+    assert ui_msg(proj, "fix the ledger !noroute") is None
+
+
+def test_session_start_ui_status(proj):
+    obj = json.loads(call("session-start", {"session_id": "s1", "cwd": str(proj)}))
+    assert obj["systemMessage"].startswith("ccr: routing active") and "\n" not in obj["systemMessage"]
 
 
 @pytest.mark.parametrize("text", ["!noroute fix the ledger", "fix the ledger !noroute",

@@ -219,6 +219,7 @@ run:                         # headless `ccr run`
 hooks:
   enabled: true              # master switch
   route_prompts: true        # inject the routing line
+  show_in_ui: true           # also show a short routing line to you (systemMessage)
   model_advice: true         # suggest /model for iterative work above the main model
   background_graph: true     # refresh a stale graph after SessionStart
   watchdog_ms: 1500          # hard deadline per hook run
@@ -487,6 +488,7 @@ Start with `ccr doctor`. It checks:
 
 | Symptom | Try |
 |---------|-----|
+| No routing line shown in the UI | `hooks.show_in_ui` must be true (default). It is emitted as the hook's `systemMessage`; the interactive CLI shows it as a hook notice, while the VS Code panel may not render it. Silent prompts (chatter, `!noroute`, slash commands) show nothing |
 | No `ccr:` line in Claude's context | `ccr doctor`. Check that `.ccr/` exists at the project root, `hooks.enabled` and `route_prompts` are on, the prompt has no `!noroute`, and `.ccr/local/hooks.log` shows no errors or watchdog overruns |
 | Hooks call an absolute Python path | install ccr on PATH (`uv tool install ...`), then rerun `ccr init` |
 | Routing ignores files you changed | `ccr graph` (incremental) or `ccr graph --rebuild` |

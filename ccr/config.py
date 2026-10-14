@@ -119,6 +119,7 @@ DEFAULTS: dict = {
     "hooks": {
         "enabled": True,             # master switch for every ccr hook
         "route_prompts": True,       # UserPromptSubmit: inject the routing line
+        "show_in_ui": True,          # also show a short routing line to the USER (systemMessage)
         "model_advice": True,        # suggest `/model <x>` for iterative work above the main model
         "background_graph": True,    # SessionStart: refresh a stale graph in the background
         "watchdog_ms": 1500,         # hard internal deadline per hook run

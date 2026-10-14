@@ -127,6 +127,16 @@ def effort_level(v) -> str | None:
     return v if isinstance(v, str) and v in EFFORT_RANK else None
 
 
+class Msg(str):
+    """Model-facing hook text that also carries a short user-facing line (`.ui`)."""
+    ui: str | None = None
+
+    def __new__(cls, text: str, ui: str | None = None):
+        o = super().__new__(cls, text)
+        o.ui = ui
+        return o
+
+
 def main_model(root: Path, sid: str | None, session: dict) -> tuple[str | None, str | None]:
     """(model id, effort) of the main session: the freshest of the status line relay
     (per session), SessionStart's `model` and the last model seen in the transcript."""

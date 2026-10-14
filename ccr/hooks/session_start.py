@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from ccr.hooks.common import load_session, log, save_session
+from ccr.hooks.common import Msg, load_session, log, save_session
 from ccr.hooks.tasks import sweep
 
 CHEAP_CHANGED_FILES = 150
@@ -81,6 +81,8 @@ def run(data: dict, root, cfg) -> str:
         return ""
     t = cfg.tiers
     tiers = ", ".join(f"{k} {v.model}/{v.effort}" for k, v in t.items())
-    return (f"ccr: routing active, {graph_status(root, cfg)}. Each prompt may carry a "
-            f"`ccr:` line with the cheapest sufficient tier ({tiers}); follow its "
-            f"delegation hint (ccr-* subagents, Explore for search).")
+    status = graph_status(root, cfg)
+    return Msg(f"ccr: routing active, {status}. Each prompt may carry a "
+               f"`ccr:` line with the cheapest sufficient tier ({tiers}); follow its "
+               f"delegation hint (ccr-* subagents, Explore for search).",
+               f"ccr: routing active, {status}")

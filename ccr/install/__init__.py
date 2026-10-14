@@ -124,6 +124,8 @@ def config_template(cfg) -> str:
               f"  enabled: {str(h['enabled']).lower()}          # master switch for ccr hooks",
               f"  route_prompts: {str(h['route_prompts']).lower()}    # inject the routing line "
               f"on each prompt (opt out per prompt with !noroute)",
+              f"  show_in_ui: {str(h['show_in_ui']).lower()}      # show the decision to you in "
+              f"the UI (systemMessage), not only to Claude\n"
               f"  model_advice: {str(h['model_advice']).lower()}     # suggest /model for "
               f"iterative work above the main model", "",
               "# Headless `ccr run`: success also requires this command to pass.",

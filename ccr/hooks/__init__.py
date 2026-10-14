@@ -62,8 +62,11 @@ def _body(name: str, raw: bytes, environ, result: dict) -> tuple[str | None, obj
     if event is None:
         return None, root
     import json
-    return json.dumps({"hookSpecificOutput": {"hookEventName": event,
-                                              "additionalContext": text}}), root
+    out = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
+    ui = getattr(text, "ui", None)
+    if ui and cfg["hooks"]["show_in_ui"]:
+        out["systemMessage"] = str(ui)
+    return json.dumps(out), root
 
 
 def main(args: list[str], *, stdin=None, stdout=None, environ=None,

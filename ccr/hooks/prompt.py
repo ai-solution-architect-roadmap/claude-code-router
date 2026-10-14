@@ -16,7 +16,7 @@ import posixpath
 import re
 import time
 
-from ccr.hooks.common import (EFFORT_RANK, effort_level, load_session, log, main_model,
+from ccr.hooks.common import (EFFORT_RANK, Msg, effort_level, load_session, log, main_model,
                               model_alias, model_rank, save_session)
 from ccr.hooks.tasks import finalize, is_retry, start
 
@@ -73,6 +73,20 @@ def facts(d) -> str:
     if r.level == "high":
         parts.append(f"risk high ({r.score:.2f})")
     return ", ".join(parts)
+
+
+def ui_line(d, tier, kind: str, fact: str, retry: bool) -> str:
+    """Short user-facing summary, e.g. `ccr → T2 sonnet/medium · ccr-implement · 2 files, risk high`."""
+    prim = d.location.primary()
+    bits = []
+    if prim:
+        bits.append(f"{len(prim)} file{'s' if len(prim) != 1 else ''}")
+    if d.risk.level != "low":
+        bits.append(f"risk {d.risk.level}")
+    if retry:
+        bits.append("retry")
+    tail = f" · {', '.join(bits)}" if bits else f" · {kind}"
+    return f"ccr → {tier.name} {tier.model}/{tier.effort} · {tier.agent}{tail}"
 
 
 def iterative_reason(d, retry: bool) -> str | None:
@@ -198,4 +212,4 @@ def run(data: dict, root, cfg) -> str | None:
         save_session(root, sid, session)
     except Exception as e:  # noqa: BLE001
         log(root, f"prompt bookkeeping failed: {e.__class__.__name__}: {e}")
-    return text
+    return Msg(text, ui_line(d, tier, kind, fact, retry))
