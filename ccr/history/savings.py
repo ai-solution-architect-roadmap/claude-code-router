@@ -40,19 +40,36 @@ def price(cfg, model: str) -> float:
 def estimate(records: list[dict], cfg) -> dict:
     routed = opus = sonnet = 0.0
     tokens = n = 0
+    d_routed = d_opus = 0.0      # decided tasks only, for cost per success
+    d_n = d_ok = 0
     for r in records:
         t, tok = r.get("tier"), _num(r.get("tokens"))
         if t not in TIERS or tok <= 0:
             continue
         n += 1
         tokens += int(tok)
-        routed += tok * price(cfg, cfg.tier(t).model) / 1e6
+        c = tok * price(cfg, cfg.tier(t).model) / 1e6
+        routed += c
         opus += tok * price(cfg, "opus") / 1e6
         sonnet += tok * price(cfg, "sonnet") / 1e6
+        if r.get("outcome") in SUCCESS | FAILURE:
+            d_n += 1
+            d_ok += r["outcome"] in SUCCESS
+            d_routed += c
+            d_opus += tok * price(cfg, "opus") / 1e6
 
     def saved(base: float):
         return round(1 - routed / base, 3) if base else None
+    # Quality-adjusted: failed tasks still cost their tokens, so routed cost is divided by the
+    # successes. The all-Opus side assumes every task succeeds (the most favourable case for
+    # Opus), so a saving that survives this comparison is not just cheaper-and-worse.
+    per_ok = round(d_routed / d_ok, 4) if d_ok else None
+    opus_per = round(d_opus / d_n, 4) if d_n else None
     return {"tasks": n, "tokens": tokens, "routed_usd": round(routed, 4),
+            "decided": d_n, "successes": d_ok, "routed_per_success": per_ok,
+            "opus_per_success": opus_per,
+            "saved_per_success": round(1 - per_ok / opus_per, 3) if per_ok and opus_per
+            else None,
             "all_opus_usd": round(opus, 4), "all_sonnet_usd": round(sonnet, 4),
             "saved_vs_opus": saved(opus), "saved_vs_sonnet": saved(sonnet),
             "estimate": True}
@@ -89,11 +106,31 @@ def misroutes(records: list[dict], cfg) -> dict:
             over += 1
             items.append(_item(r, "over", f"{TIERS[i - 1]} succeeded {lo[0]}/{n} for "
                                           f"{r['class']}"))
+    cues = cue_stats(decided, k, float(hc["fail_rate_up"]))
     n = len(decided)
-    return {"decided": n, "over": over, "under": under,
+    return {"decided": n, "cues": cues, "over": over, "under": under,
             "over_rate": round(over / n, 3) if n else None,
             "under_rate": round(under / n, 3) if n else None,
-            "items": items, "suggestions": suggestions(items)}
+            "items": items, "suggestions": suggestions(items) + [c["note"] for c in cues]}
+
+
+def cue_stats(decided: list[dict], k: int, fail_up: float) -> list[dict]:
+    """Per cue word and tier: outcomes of the tasks it fired on. A cue whose tasks keep
+    failing at the tier it routed to is a rule that has drifted (it under-rates the work)."""
+    st: dict[tuple[str, str], list[int]] = {}
+    for r in decided:
+        tr = r.get("trace") if isinstance(r.get("trace"), dict) else {}
+        for term in {*(tr.get("rules") or []), *(tr.get("hard_terms") or [])}:
+            c = st.setdefault((term, r["tier"]), [0, 0])
+            c[0 if r["outcome"] in SUCCESS else 1] += 1
+    out = []
+    for (term, tier), (ok, bad) in sorted(st.items()):
+        n = ok + bad
+        if n >= k and bad / n >= fail_up:
+            out.append({"term": term, "tier": tier, "ok": ok, "failed": bad,
+                        "note": f"cue '{term}' failed {bad}/{n} at {tier}: it under-rates "
+                                f"these tasks; weight it up or add it to hard_terms"})
+    return out
 
 
 def suggestions(items: list[dict]) -> list[str]:
@@ -131,6 +168,11 @@ def format_lines(est: dict, mis: dict, detail: bool = False) -> list[str]:
                    f" all-Opus ({pct(est['saved_vs_opus'])} saved) and "
                    f"${est['all_sonnet_usd']:.2f} all-Sonnet ({pct(est['saved_vs_sonnet'])}) "
                    f"over {est['tasks']} tasks; estimate from tokens x `pricing:`")
+        if est["saved_per_success"] is not None:
+            out.append(f"           per success (failures cost tokens too; Opus assumed to "
+                       f"always succeed): ${est['routed_per_success']:.4f} routed vs "
+                       f"${est['opus_per_success']:.4f} all-Opus "
+                       f"({pct(est['saved_per_success'])} saved)")
     if mis["decided"]:
         out.append(f"Misroutes: over-routed {mis['over']}/{mis['decided']} "
                    f"({pct(mis['over_rate'])}, a cheaper tier had a proven record), "

@@ -398,18 +398,22 @@ Misroutes: over-routed 2/40 (5%, a cheaper tier had a proven record), under-rout
   all-Opus and all-Sonnet baseline. It is an estimate: it assumes the stronger model would
   use the same tokens, so it ignores rework a stronger model might save. A negative saving
   against all-Sonnet is shown, not hidden. Read it next to the success rate.
+- **Per success** divides routed cost by the number of successes, so failed tasks (which
+  still cost tokens) count against routing. The all-Opus side assumes Opus always succeeds,
+  the case most favourable to Opus. A saving that survives this is not just cheaper-and-worse.
 - **Over-routed**: the task succeeded above the class floor while the tier below has a
   proven record (`min_samples`, `success_rate_down`) for that class x area.
 - **Under-routed**: the task failed or was escalated at the tier it got.
 - `--misroutes` lists each one with the rules that fired, from the `trace` in the history
   record (cue words from the built-in rules, the `hard_terms` that matched, and which +1
   signals fired; never the prompt text). The `tune:` lines say which rule to adjust. They
-  only suggest: ccr never edits its own rules.
+  only suggest: ccr never edits its own rules. A `tune: cue 'x' failed 3/4 at T1` line
+  means a cue word's tasks keep failing at the tier it routes to: the rule has drifted.
 
 `uv run python scripts/bench_routing.py` replays a labelled prompt set (terse but huge,
 long but trivial, "fix login sometimes failing", ...) and reports under- and over-routed
-prompts and the estimated cost against the baselines, without API calls. Edit `PROMPTS` to
-your own work.
+prompts and the estimated cost against the baselines, without API calls. Edit `PROMPTS`, or pass
+`--prompts FILE.json` (a list of `[prompt, need_tier, cap_tier]`, tiers 0-4) for your own work.
 
 How the columns are computed:
 

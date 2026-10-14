@@ -398,3 +398,43 @@ def test_bench_routing_replay_has_no_underrouted_prompts():
     assert out["under"] == 0 and out["over"] == 0, [r for r in out["rows"]
                                                     if r["under"] or r["over"]]
     assert out["estimate"]["saved_vs_opus"] > 0.2
+
+
+def test_cost_per_success_charges_failures_to_the_routed_side():
+    cfg = default_config()
+    recs = [_t("T1", "success", tokens=1_000_000, id="a"),
+            _t("T1", "failure", tokens=1_000_000, id="b")]
+    est = savings.estimate(recs, cfg)
+    assert est["routed_per_success"] == pytest.approx(12.0)     # 2 x $6 over 1 success
+    assert est["opus_per_success"] == pytest.approx(30.0)       # Opus assumed to always pass
+    assert est["saved_per_success"] == pytest.approx(0.6)
+    bad = savings.estimate([_t("T3", "failure", tokens=1000, id=i) for i in range(2)], cfg)
+    assert bad["routed_per_success"] is None and bad["saved_per_success"] is None
+    lines = savings.format_lines(est, savings.misroutes(recs, cfg))
+    assert any("per success" in ln for ln in lines)
+
+
+def test_cue_that_keeps_failing_is_flagged_as_drifted():
+    ok = {"rules": ["fix"], "hard_terms": []}
+    bad = {"rules": ["fix", "cache"], "hard_terms": ["cache"]}
+    recs = [_t("T1", "success", id=f"s{i}", trace=ok) for i in range(2)]
+    recs += [_t("T1", "failure", id=f"f{i}", trace=bad) for i in range(3)]
+    m = savings.misroutes(recs, default_config())
+    flagged = {c["term"] for c in m["cues"]}
+    assert flagged == {"cache", "fix"}       # fix: 3 of its 5 tasks failed too
+    assert any("cue 'cache' failed 3/3 at T1" in s for s in m["suggestions"])
+
+
+def test_bench_accepts_a_custom_prompt_file(tmp_path):
+    import importlib.util
+    import json as _json
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[1] / "scripts" / "bench_routing.py"
+    spec = importlib.util.spec_from_file_location("bench_routing2", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    f = tmp_path / "p.json"
+    f.write_text(_json.dumps([["where is the pagination helper defined?", 0, 1],
+                              ["fix login sometimes failing", 4, 4]]))
+    out = mod.replay(mod.setup(), prompts=mod.load_prompts(str(f)))
+    assert out["total"] == 2 and out["under"] == 1      # the file's own labels decide

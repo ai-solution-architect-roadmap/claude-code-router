@@ -1,4 +1,4 @@
-"""Routing benchmark: `uv run python scripts/bench_routing.py [TOKENS_PER_TASK] [--json]`.
+"""Routing benchmark: `uv run python scripts/bench_routing.py [TOKENS_PER_TASK] [--json] [--prompts FILE.json]`.
 
 Replays a labelled prompt set through the router against the shop_py fixture (no API calls).
 Each prompt carries the lowest tier that should handle it (`need`) and the highest that is not
@@ -33,6 +33,20 @@ PROMPTS = [
     ("the checkout flow intermittently double charges customers, figure out why", 3, 4),
     ("rework the payment flow", 3, 4),
     ("drop the legacy_id column from the users table in production", 4, 4),
+    ("what does the Engine class do?", 0, 1),
+    ("rename the helper in app/utils/strings.py", 0, 1),
+    ("write unit tests for app/utils/strings.py", 1, 2),
+    ("fix the typo in the docstring of paginate()", 0, 1),
+    ("add a --dry-run flag to app/main.py", 1, 2),
+    ("speed up the report export, it is slow for large datasets", 2, 3),
+    ("rotate the signing key used for login tokens", 3, 4),
+    ("investigate why refunds are sometimes applied twice", 3, 4),
+    ("the export job occasionally hangs, find the root cause", 3, 3),
+    ("fix the bug where the page size is ignored in app/api/handlers.py", 1, 2),
+    ("migrate the orders table to add a status column", 3, 4),
+    ("harden the session token validation", 3, 4),
+    ("tidy up app/reports/export.py", 1, 2),
+    ("1. add a --verbose flag to app/main.py\n2. pass it to Engine\n3. add a test", 1, 2),
 ]
 
 
@@ -47,7 +61,14 @@ def setup() -> Path:
     return root
 
 
-def replay(root: Path, tokens: int = 50_000) -> dict:
+def load_prompts(path: str | None) -> list:
+    """PROMPTS, or a JSON file of [prompt, need, cap] triples (tier numbers 0-4)."""
+    if not path:
+        return PROMPTS
+    return [(p, int(a), int(b)) for p, a, b in json.loads(Path(path).read_text())]
+
+
+def replay(root: Path, tokens: int = 50_000, prompts: list | None = None) -> dict:
     from ccr.config import TIERS, default_config
     from ccr.graph import Graph
     from ccr.history.savings import estimate
@@ -57,7 +78,7 @@ def replay(root: Path, tokens: int = 50_000) -> dict:
     memory = collect(root, nested=False)
     rows = []
     with Graph.open(root) as g:
-        for prompt, need, cap in PROMPTS:
+        for prompt, need, cap in prompts or PROMPTS:
             d = decide(prompt, root, cfg=cfg, graph=g, memory=memory, history_records=[], now=0,
                        nested_memory=False)
             i = TIERS.index(d.tier.name)
@@ -72,14 +93,16 @@ def replay(root: Path, tokens: int = 50_000) -> dict:
 
 def main(argv: list[str]) -> int:
     tokens = next((int(a) for a in argv if a.isdigit()), 50_000)
-    out = replay(setup(), tokens)
+    argv = list(argv)
+    path = argv[argv.index("--prompts") + 1] if "--prompts" in argv else None
+    out = replay(setup(), tokens, load_prompts(path))
     if "--json" in argv:
         print(json.dumps(out, indent=2))
         return 0
     for r in out["rows"]:
         flag = "UNDER" if r["under"] else "OVER " if r["over"] else "ok   "
         print(f"{flag} {r['tier']} (want {r['need']}-{r['cap']}) {r['class']:<9} "
-              f"{r['prompt'][:70]}")
+              f"{r['prompt'][:70].replace(chr(10), ' / ')}")
     e = out["estimate"]
     print(f"\ntier mix: {out['mix']}; under-routed {out['under']}/{out['total']}, "
           f"over-routed {out['over']}/{out['total']}")
