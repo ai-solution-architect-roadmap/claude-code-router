@@ -1,0 +1,2 @@
+# ccr: append-only routing history, merged by concatenation
+.ccr/history.jsonl merge=union

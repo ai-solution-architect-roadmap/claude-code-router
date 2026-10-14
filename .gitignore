@@ -12,3 +12,6 @@ build/
 # .ccr/config.yaml and .ccr/history.jsonl are committed instead
 .ccr/
 .ruff_cache/
+
+# ccr (local caches, never commit)
+.ccr/backups/
