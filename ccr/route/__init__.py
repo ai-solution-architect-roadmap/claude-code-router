@@ -4,7 +4,7 @@ Policy (all thresholds in .ccr/config.yaml):
   * start from the class base tier (question/trivial T0 ... migration/security/debugging T3);
   * adjustments: large scope, vague bug report, high risk, critical path, memory flags push up;
     small scope pushes down. Ups and downs each count once, and escalation above the base is
-    capped at `routing.max_escalation` (1) tier;
+    capped at `routing.max_escalation` (2) tiers (the second only when 3+ signals agree);
   * history: repeated failures at the chosen tier push up (within the cap); consistent
     success one tier lower pushes down;
   * without a T4 rule the tier never exceeds `routing.ceiling_without_critical` (T3);
@@ -26,6 +26,8 @@ from ccr.route.budget import Budget, budget_pressure
 CHANGE = {"trivial", "tests", "bugfix", "feature", "refactor", "perf", "migration", "security",
           "debugging"}
 SUBSTANTIVE = CHANGE - {"trivial"}
+DEEP_COMPLEXITY = 0.6    # complexity component at which code counts as hard to change
+DEEP_SUPPORT = 0.4       # blast radius / missing-test level that makes complex code risky
 _AUTO = object()
 
 
@@ -206,6 +208,22 @@ def _apply_hint(hint, tc: TaskClass, loc: Location, root: Path, graph) -> list[s
     return changes
 
 
+def _deep_code(risk: Risk) -> str | None:
+    """Why the located code is hard to change safely, or None. Needs complex code plus
+    either many dependents or weak test coverage."""
+    c = risk.components
+    cx, br, tp = (c[n].value if n in c else 0.0
+                  for n in ("complexity", "blast_radius", "test_proximity"))
+    if cx < DEEP_COMPLEXITY or (br < DEEP_SUPPORT and tp < DEEP_SUPPORT):
+        return None
+    why = [f"complexity {cx:.2f}"]
+    if br >= DEEP_SUPPORT:
+        why.append(f"blast radius {br:.2f}")
+    if tp >= DEEP_SUPPORT:
+        why.append("weak tests")
+    return ", ".join(why)
+
+
 def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: list[dict],
            cfg: Config, conf: float) -> Decision:
     kind = tc.kind
@@ -229,7 +247,12 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
         ups.append(f"vague bug report (vagueness {tc.vagueness:.2f}): needs exploration")
     if tc.hard and kind in ("perf", "bugfix"):
         ups.append(f"hard problem ({', '.join(tc.hard[:2])})")
-    if risk.level == "high" and kind in SUBSTANTIVE:
+    # the codebase decides how hard a bug is, whatever the wording: complex code that is
+    # widely depended on or untested needs a stronger model to diagnose safely
+    deep = _deep_code(risk) if kind in ("bugfix", "debugging", "perf") else None
+    if deep:
+        ups.append(f"complex code ({deep})")
+    elif risk.level == "high" and kind in SUBSTANTIVE:
         ups.append(f"risk high ({risk.score:.2f})")
     if kind in SUBSTANTIVE and risk.critical or kind == "trivial" and risk.critical_located:
         ups.append(f"critical path ({'/'.join(risk.critical_groups)})")
@@ -242,9 +265,12 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     if ups and max_esc <= 0:
         reasons.append("escalation disabled (routing.max_escalation 0): " + "; ".join(ups))
     elif ups:
-        tier += 1
-        reasons.append("+1: " + "; ".join(ups)
-                       + (" (escalation capped at one tier)" if len(ups) > 1 else ""))
+        # one tier normally; two when three or more independent signals agree
+        step = 2 if len(ups) >= 3 and max_esc >= 2 else 1
+        tier += step
+        reasons.append(f"+{step}: " + "; ".join(ups)
+                       + (" (escalation capped at one tier)" if len(ups) > 1 and step == 1
+                          else ""))
     critical_up = any(u.startswith(("critical path", "memory flags")) for u in ups)
     if downs and critical_up:
         reasons.append(f"{'; '.join(downs)}: ignored on a critical path")

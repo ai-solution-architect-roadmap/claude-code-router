@@ -102,7 +102,8 @@ DEFAULTS: dict = {
         "timeout_s": 45,
     },
     "routing": {
-        "max_escalation": 1,         # tiers above the class base without a T4 rule
+        "max_escalation": 2,         # tiers above the class base without a T4 rule (2nd tier
+                                     # only when 3+ independent signals agree)
         "ceiling_without_critical": "T3",
     },
     # `ccr run` (headless `claude -p`).

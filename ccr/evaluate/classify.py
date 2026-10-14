@@ -128,7 +128,11 @@ DESTRUCTIVE = re.compile(
 HARD = re.compile(
     r"\b(?:race\s+conditions?|data\s+races?|deadlock\w*|concurren\w*|thread[- ]safe\w*|"
     r"lock\s+contention|goroutine\s+leaks?|memory\s+leaks?|distributed|idempoten\w*|"
-    r"transactional|consistency)\b", _I)
+    r"transactional|consistency|"
+    # intermittent failures: reproduction and diagnosis dominate the work, not the edit
+    r"sometimes|intermittent\w*|flak(?:y|iness|e)|randomly|occasional\w*|sporadic\w*|"
+    r"every\s+now\s+and\s+then|once\s+in\s+a\s+while|only\s+under\s+load|"
+    r"works?\s+on\s+my\s+machine)\b", _I)
 VAGUE = re.compile(
     r"\b(?:something|somehow|stuff|things|whatever|etc|better|improve|nicer|cleaner|properly|"
     r"make\s+it\s+work|doesn'?t\s+work|not\s+working|weird|some\s+issues?|"

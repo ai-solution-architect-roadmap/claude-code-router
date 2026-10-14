@@ -370,3 +370,11 @@ def test_explicit_steps_are_detected():
     assert chain.steps == 3
     assert classify("Add a dry-run flag, then test it").steps == 0   # too few to be a plan
     assert classify("Add a dry-run flag").steps == 0
+
+
+@pytest.mark.parametrize("task", [
+    "fix login sometimes failing", "the sync job fails intermittently",
+    "flaky upload test, fails randomly"])
+def test_intermittent_wording_is_a_hard_problem(task):
+    assert classify(task).hard
+    assert not classify("fix the login redirect").hard

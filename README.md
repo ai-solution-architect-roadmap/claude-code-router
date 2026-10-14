@@ -113,11 +113,14 @@ How a tier is picked (every number is in the config):
 
 1. Start from the **class base tier**: question and trivial start at T0; tests and bugfix at
    T1; feature, refactor and perf at T2; migration, security and debugging at T3.
-2. **+1** for any of: large scope, a vague bug report, a hard problem, high risk, a
-   critical path, or a memory flag (critical, protected, fragile). The total push-up is
-   capped at one tier above the base (`routing.max_escalation`).
-3. **-1** for a small scope, but never on a critical path, and never below T1 for code
-   changes.
+2. **+1** for any of: large scope, a vague bug report, a hard problem (including
+   intermittent failures: "sometimes", "flaky", "randomly"), complex code (for bugs, perf and
+   debugging: high complexity plus many dependents or weak tests), high risk, a critical
+   path, or a memory flag (critical, protected, fragile). **+2** when three or more of these
+   agree. The push-up is capped by `routing.max_escalation` (2).
+3. **-1** for a small scope or explicit step-by-step instructions, but never on a critical
+   path, and never below T1 for code changes.
+Prompt length is not a signal. The code the task touches is.
 4. **Learning** from history (see [Feedback, stats and learning](#feedback-stats-and-learning)).
 5. Without a T4 rule the tier never exceeds **T3** (`routing.ceiling_without_critical`).
 6. **T4 rules** (critical path):
@@ -204,7 +207,7 @@ llm:                         # opt-in assist (`ccr explain --llm`, `ccr run`)
   timeout_s: 45
 
 routing:
-  max_escalation: 1          # tiers above the class base without a T4 rule
+  max_escalation: 2          # tiers above the class base without a T4 rule
   ceiling_without_critical: T3
 
 run:                         # headless `ccr run`

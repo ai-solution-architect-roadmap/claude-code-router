@@ -159,3 +159,38 @@ def test_steps_lower_a_plain_task_but_not_a_critical_one(tmp_path):
     assert stepped.tier.index <= plain.tier.index
     assert "trace" in stepped.record() and "steps" in stepped.record()["trace"]
     assert "prompt" not in str(stepped.record()["trace"]).lower()
+
+
+def test_complex_code_escalates_bug_and_three_signals_escalate_two(tmp_path):
+    from ccr.evaluate.risk import Component, Risk
+    from ccr.route import _deep_code
+    comp = lambda **kw: {k: Component(k, v) for k, v in kw.items()}  # noqa: E731
+    assert _deep_code(Risk(components=comp(complexity=0.9, blast_radius=0.5,
+                                           test_proximity=0.0))).startswith("complexity 0.90")
+    assert _deep_code(Risk(components=comp(complexity=0.9, blast_radius=0.1,
+                                           test_proximity=1.0))) is not None   # untested
+    assert _deep_code(Risk(components=comp(complexity=0.9, blast_radius=0.1,
+                                           test_proximity=0.0))) is None       # tested, isolated
+    assert _deep_code(Risk(components=comp(complexity=0.2, blast_radius=0.9,
+                                           test_proximity=1.0))) is None       # simple code
+
+
+def test_three_signals_climb_two_tiers(monkeypatch, tmp_path):
+    from ccr.evaluate.risk import Component, Risk
+    from ccr.route import _route
+    from ccr.config import default_config
+    from ccr.evaluate.classify import classify
+    from ccr.evaluate.locate import Location
+    from ccr.route.budget import Budget
+    comp = {n: Component(n, v) for n, v in
+            dict(complexity=0.9, blast_radius=0.6, test_proximity=1.0).items()}
+    risk = Risk(score=0.8, level="high", components=comp)
+    tc = classify("fix login sometimes failing across the codebase", located=True)
+    tc.kind = "bugfix"                      # base T1
+    cfg = default_config()
+    cfg.data["routing"]["ceiling_without_critical"] = "T4"
+    d = _route(tc, Location(), risk, Budget(), [], cfg, 0.9)
+    assert d.base == "T1" and d.tier.name == "T3"
+    assert any(r.startswith("+2:") for r in d.reasons)
+    cfg.data["routing"]["max_escalation"] = 1
+    assert _route(tc, Location(), risk, Budget(), [], cfg, 0.9).tier.name == "T2"
