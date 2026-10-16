@@ -18,7 +18,7 @@ import time
 
 from ccr.hooks.common import (EFFORT_RANK, Msg, effort_level, load_session, log, main_model,
                               model_alias, model_rank, save_session)
-from ccr.hooks.tasks import finalize, is_retry, start
+from ccr.hooks.tasks import finalize, infer_outcome, is_retry, start
 
 NOROUTE = re.compile(r"(?:^|\s)!noroute\b", re.I)
 # Messages Claude Code injects as user turns (background task results, slash command
@@ -130,12 +130,13 @@ def advice(d, tier, main: str | None, main_effort: str | None, why_iter: str | N
 
 def _retry(d, cfg, pending: dict, session: dict, prompt: str, kind: str, area: str, fact: str):
     """A retry escalates one tier above the failed attempt (within the ceiling)."""
-    from ccr.config import TIERS
+    from ccr.config import TIERS, TOP
     prev = pending.get("tier")
     p = TIERS.index(prev) if prev in TIERS else 0
-    ceiling = 4 if (d.t4_rules or d.risk.critical) else \
+    ceiling = TOP if (d.t4_rules or d.risk.critical) else \
         TIERS.index(cfg["routing"]["ceiling_without_critical"])
-    new = max(d.tier.index, min(p + 1, ceiling))
+    own = 0 if d.reclassed else d.tier.index    # "still failing" names no code: not debugging
+    new = max(own, min(p + 1, ceiling))
     tier = cfg.tier(new)
     if pending.get("class"):
         kind = pending["class"]
@@ -150,8 +151,38 @@ def _retry(d, cfg, pending: dict, session: dict, prompt: str, kind: str, area: s
     return tier, prev, kind, area, fact, [note]
 
 
+REWORK = re.compile(
+    r"\b(?:not\s+quite|not\s+what\s+i|i\s+meant|i\s+said|instead|rather\s+than|actually|"
+    r"wrong\s+(?:file|function|place|approach)|you\s+(?:missed|forgot|broke|removed|changed)|"
+    r"too\s+(?:shallow|simple|basic|vague)|redo|do\s+it\s+properly|start\s+again|"
+    r"that'?s\s+not\s+(?:it|right|what))\b", re.I)
+
+
+def escalation_signals(prompt: str, pending: dict, session: dict, d, main, cfg,
+                       now: float | None = None) -> list[str]:
+    """Signs that the previous task's answer fell short without a "still failing" phrase:
+      manual_model_up  you moved the main session to a stronger model before this prompt, and
+                       this prompt is about the same code or leans on the last answer
+      possible_rework  a dissatisfied reply ("not quite", "I meant", "you missed") about the same
+                       code within hooks.rework_minutes of the last activity"""
+    paths = {c.path for c in d.location.candidates}
+    same = bool(paths & set(session.get("files") or ())) or (
+        d.area not in ("*", "") and d.area == pending.get("area"))
+    sig = []
+    old, new = model_rank(pending.get("main_model")), model_rank(main)
+    if old is not None and new is not None and new > old and (same or is_followup(prompt, d)):
+        sig.append("manual_model_up")
+    task = session.get("task") if isinstance(session.get("task"), dict) else {}
+    last = float(task.get("last_ts") or pending.get("ts") or 0)
+    window = int(cfg["hooks"]["rework_minutes"]) * 60
+    if same and REWORK.search(prompt[:300]) and last and (now or time.time()) - last <= window:
+        sig.append("possible_rework")
+    return sig
+
+
 def _record(root, sid, tp, session: dict, pending, d, tier, kind: str, area: str, fact: str,
-            retry: bool, escalated_from, main) -> None:
+            retry: bool, escalated_from, main, outcome: str | None, prompt: str = "",
+            cfg=None) -> None:
     """Close the previous task and start tracking this one in the session file."""
     from ccr.config import TIERS
     if tp:
@@ -161,17 +192,71 @@ def _record(root, sid, tp, session: dict, pending, d, tier, kind: str, area: str
                 session["offset"] = os.path.getsize(tp)
             except OSError:
                 session["offset"] = 0
+    if pending is not None and cfg is not None and not retry:
+        sig = escalation_signals(prompt, pending, session, d, main, cfg)
+        if sig:
+            task = session.setdefault("task", {})
+            task["signals"] = sorted(set(task.get("signals") or []) | set(sig))
     if pending is not None:          # absorbs the transcript tail, then records it
         if retry and escalated_from in TIERS and tier.index > TIERS.index(escalated_from):
             pending["escalated_to"] = tier.name
-        finalize(root, sid, session, "failure" if retry else "success")
+        finalize(root, sid, session, outcome)
     start(session, {
         "ts": int(time.time()), "class": kind, "area": area, "tier": tier.name,
         "model": tier.model, "effort": tier.effort, "risk": d.risk.score,
         "confidence": d.confidence, "source": "hook", "escalated_from": escalated_from,
         "main_model": model_alias(main), "trace": d.trace()})
     session["facts"] = fact
+    if d.location.candidates:
+        session["files"] = [c.path for c in d.location.candidates[:3]]
     save_session(root, sid, session)
+
+
+ANAPHORA = re.compile(r"\b(?:that|it|this|those|them|these|the\s+same|same\s+(?:for|here|thing|way)|"
+                      r"too|also|as\s+well|again|the\s+other|next|another\s+one)\b", re.I)
+FOLLOWUP_MAX_WORDS = 6
+FOLLOWUP_MAX_CONFIDENCE = 0.35
+
+
+def is_followup(prompt: str, d) -> bool:
+    """A reply that leans on the conversation ("do the same for refunds", "make it stricter",
+    "the header row is wrong") rather than carrying its own anchor in the code."""
+    words = len(prompt.split())
+    return bool(ANAPHORA.search(prompt)) and words <= 12 or words <= FOLLOWUP_MAX_WORDS \
+        and not d.location.located
+
+
+def _follow_up(prompt: str, d, pending: dict, session: dict, root, cfg, graph_kw: dict):
+    """Give a follow-up the previous task's context: its files for locating, and (when the
+    follow-up itself says little about the kind of work) its class and tier."""
+    from ccr.route import decide
+    note = None
+    files = [f for f in session.get("files") or [] if isinstance(f, str)]
+    if files and not d.location.located:
+        d = decide(prompt[:MAX_EVAL_CHARS] + "\n" + " ".join(files), root, cfg=cfg, **graph_kw)
+        note = "uses the files from the previous task"
+    inherit = None
+    if d.task_class.confidence < FOLLOWUP_MAX_CONFIDENCE and pending.get("tier") \
+            and pending.get("class") in CHANGE_KINDS:
+        inherit = pending
+        note = f"continues the previous {pending['class']} task at {pending['tier']}"
+    return d, inherit, note
+
+
+def _decide(prompt, root, cfg, g, tp, session, pending, retry):
+    """decide() for the prompt, plus the previous task's context for a follow-up."""
+    from ccr.route import decide
+    inherit = note = None
+    try:
+        d = decide(prompt[:MAX_EVAL_CHARS], root, cfg=cfg, graph=g, transcript_path=tp)
+        if pending is not None and not retry and is_followup(prompt, d) \
+                and not is_chatter(prompt, d):
+            d, inherit, note = _follow_up(prompt, d, pending, session, root, cfg,
+                                          {"graph": g, "transcript_path": tp})
+    finally:
+        if g is not None:
+            g.close()
+    return d, inherit, note
 
 
 def run(data: dict, root, cfg) -> str | None:
@@ -190,27 +275,29 @@ def run(data: dict, root, cfg) -> str | None:
     g = Graph.open(root)
     if g is None and db_path(root).exists():
         return None                      # unreadable graph: fail open, doctor reports it
-    from ccr.route import decide
-    try:
-        d = decide(prompt[:MAX_EVAL_CHARS], root, cfg=cfg, graph=g, transcript_path=tp)
-    finally:
-        if g is not None:
-            g.close()
-
     session = load_session(root, sid)
     pending = session.get("pending") if isinstance(session.get("pending"), dict) else None
     retry = pending is not None and is_retry(prompt)
+    d, inherit, follow_note = _decide(prompt, root, cfg, g, tp, session, pending, retry)
+
     if not retry and is_chatter(prompt, d):
         return None                      # "thanks", "yes go on": the current task continues
 
     kind, area, fact = d.task_class.kind, d.area, facts(d)
     tier, escalated_from, notes = d.tier, None, []
+    if inherit is not None:
+        tier, kind = cfg.tier(inherit["tier"]), inherit["class"]
+        if inherit.get("area") and area == "*":
+            area = inherit["area"]
+        fact = session.get("facts") or fact
+    if follow_note:
+        notes.append(f"Follow-up: {follow_note}.")
     if retry:
         tier, escalated_from, kind, area, fact, notes = _retry(
             d, cfg, pending, session, prompt, kind, area, fact)
     if d.budget.pressure and not retry:
         notes.append(f"Weekly usage {d.budget.used_pct:.0f}%: tier lowered to save quota.")
-    if d.confidence < float(cfg["llm"]["threshold"]) and not retry and tier.index < 4:
+    if d.confidence < float(cfg["llm"]["threshold"]) and not retry and tier.index < len(cfg.tiers) - 1:
         notes.append("Low routing confidence: escalate one tier if this falls short.")
 
     main, main_effort = main_model(root, sid, session)
@@ -222,8 +309,14 @@ def run(data: dict, root, cfg) -> str | None:
         text += " " + " ".join(notes)
 
     try:   # bookkeeping is best effort: the routing line is still worth emitting
+        outcome = infer_outcome(prompt, session, cfg) if pending is not None else None
         _record(root, sid, tp, session, pending, d, tier, kind, area, fact, retry,
-                escalated_from, main)
+                escalated_from, main, outcome, prompt, cfg)
+        if cfg["hooks"]["store_prompts"] and isinstance(session.get("pending"), dict):
+            from ccr.history import prompts
+            prompts.append(root, prompts.snapshot(
+                session["pending"]["id"], prompt, d, tier, fact, notes, retry, escalated_from,
+                cfg["hooks"]["redact_prompts"]))
     except Exception as e:  # noqa: BLE001
         log(root, f"prompt bookkeeping failed: {e.__class__.__name__}: {e}")
     return Msg(text, ui_line(d, tier, kind, fact, retry))

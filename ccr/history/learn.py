@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ccr.config import TIERS
+from ccr.config import TIERS, TOP
 
 SUCCESS = {"success"}
 FAILURE = {"failure", "escalated"}
@@ -57,6 +57,38 @@ class Learned:
     reason: str | None = None   # line for Decision.reasons (None: no change)
 
 
+STRUGGLE_SIGNALS = {"self_reported_failure", "subagent_reported_failure", "manual_model_up"}
+REWORK_REPEATS = 2      # possible_rework counts only when it keeps happening for a class x area x tier
+
+
+def struggled(r: dict, hc: dict) -> bool:
+    """A recorded success that looks like it was hard won: many tool errors or turns, or the
+    model said it could not finish. Learning treats these as failures; stats still show the
+    real outcome."""
+    if r.get("outcome") not in SUCCESS:
+        return False
+    errs, turns = int(hc.get("struggle_tool_errors") or 0), int(hc.get("struggle_turns") or 0)
+    return bool((errs and (r.get("tool_errors") or 0) >= errs)
+                or (turns and (r.get("turns") or 0) >= turns)
+                or STRUGGLE_SIGNALS & set(r.get("signals") or ()))
+
+
+def mark_struggle(records: list[dict], cfg) -> list[dict]:
+    hc = cfg["history"]
+    rework: dict[tuple, int] = {}
+    for r in records:
+        if r.get("outcome") in SUCCESS and "possible_rework" in (r.get("signals") or ()):
+            k = (r.get("class"), r.get("area"), r.get("tier"))
+            rework[k] = rework.get(k, 0) + 1
+    out = []
+    for r in records:
+        again = "possible_rework" in (r.get("signals") or ()) and r.get("outcome") in SUCCESS \
+            and rework.get((r.get("class"), r.get("area"), r.get("tier")), 0) >= REWORK_REPEATS
+        out.append({**r, "outcome": "failure", "struggled": True} if struggled(r, hc) or again
+                   else r)
+    return out
+
+
 def _rate(c: list[int] | None, i: int) -> float:
     return c[i] / sum(c) if c and sum(c) else 0.0
 
@@ -67,7 +99,7 @@ def adjust(tier: int, *, kind: str, area: str, records: list[dict], cfg, cap: in
     hc = cfg["history"]
     k, up, down = int(hc["min_samples"]), float(hc["fail_rate_up"]), \
         float(hc["success_rate_down"])
-    stats, scope = tier_counts(records, kind, area)
+    stats, scope = tier_counts(mark_struggle(records, cfg), kind, area)
     where = f"{kind} in {area}" if scope == "area" else f"{kind} (all areas)"
     if not stats:
         return Learned(tier, 0, f"no history for {kind}")
@@ -109,7 +141,7 @@ def summarize(records: list[dict], cfg) -> list[dict]:
     k, up, down = int(hc["min_samples"]), float(hc["fail_rate_up"]), \
         float(hc["success_rate_down"])
     groups: dict[tuple[str, str], dict[str, list[int]]] = {}
-    for r in records:
+    for r in mark_struggle(records, cfg):
         kind, tier = r.get("class"), r.get("tier")
         if not isinstance(kind, str) or tier not in TIERS:
             continue
@@ -132,7 +164,7 @@ def summarize(records: list[dict], cfg) -> list[dict]:
                                 "note": f"{where}: {t} {s}/{n} ok (needs {k} samples)"})
                 continue
             if f / n >= up:
-                nxt = TIERS[min(i + 1, 4)]
+                nxt = TIERS[min(i + 1, TOP)]
                 out.append({"class": kind, "area": area, "tier": t, "action": "up",
                             "note": f"{where}: {t} failed {f}/{n} -> start at {nxt}"})
             elif s / n >= down and i > 0:

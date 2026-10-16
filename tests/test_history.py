@@ -434,7 +434,20 @@ def test_bench_accepts_a_custom_prompt_file(tmp_path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     f = tmp_path / "p.json"
-    f.write_text(_json.dumps([["where is the pagination helper defined?", 0, 1],
-                              ["fix login sometimes failing", 4, 4]]))
+    f.write_text(_json.dumps([["where is the pagination helper defined?", "T0", "T1"],
+                              ["fix login sometimes failing", "T4", "T4"]]))
     out = mod.replay(mod.setup(), prompts=mod.load_prompts(str(f)))
     assert out["total"] == 2 and out["under"] == 1      # the file's own labels decide
+
+
+def test_struggled_success_counts_as_failure_for_learning():
+    from ccr.config import load_config
+    from ccr.history import learn, make_record
+    cfg = load_config("/nonexistent")
+    recs = [make_record({"tier": "T1", "class": "bugfix", "area": "a"}, outcome="success",
+                        tool_errors=9) for _ in range(3)]
+    res = learn.adjust(1, kind="bugfix", area="a", records=recs, cfg=cfg, cap=3, floor=1)
+    assert res.delta == 1 and "failed 3/3" in res.note
+    assert not learn.struggled({"outcome": "failure", "tool_errors": 99}, cfg["history"])
+    cfg["history"]["struggle_tool_errors"] = 0
+    assert learn.adjust(1, kind="bugfix", area="a", records=recs, cfg=cfg, cap=3, floor=1).delta <= 0

@@ -11,6 +11,8 @@ last assistant message is only scanned for a failure hint ("I was unable to ..."
 """
 from __future__ import annotations
 
+import time
+
 from ccr.hooks.common import load_session, save_session
 from ccr.hooks.tasks import FAIL_HINT, absorb
 
@@ -43,6 +45,7 @@ def run(data: dict, root, cfg) -> None:
         if data.get("stop_hook_active") is True:
             signals.add("stop_hook_loop")
     task["signals"] = sorted(signals)
+    task["last_ts"] = time.time()
     tp = data.get("transcript_path")
     absorb(session, tp if isinstance(tp, str) else None)
     save_session(root, sid, session)

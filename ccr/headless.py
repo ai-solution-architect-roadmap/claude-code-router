@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from ccr.config import TIERS, Config
+from ccr.config import TIERS, TOP, Config
 
 if TYPE_CHECKING:
     from ccr.route import Decision
@@ -201,12 +201,12 @@ def _escalation_note(prev: Attempt) -> str:
 
 def next_tier(cur: int, decision, cfg) -> tuple[int | None, str]:
     """(next tier index or None, reason when None). Exactly one tier up, never skipping."""
-    if cur >= 4:
+    if cur >= TOP:
         return None, "already at T4"
     nxt = cur + 1
     rule = bool(getattr(decision, "t4_rules", None))
     ceiling = TIERS.index(cfg["routing"]["ceiling_without_critical"])
-    if nxt == 4 and not rule:
+    if nxt == TOP and not rule:
         return None, "T4 needs a critical-path rule"
     if nxt > ceiling and not rule:
         return None, f"routing.ceiling_without_critical is {TIERS[ceiling]}"
@@ -339,6 +339,12 @@ def run_task(task: str, root: str | Path, *, cfg: Config | None = None, tier: st
             a.record = rec
             try:
                 H.append(root, rec)
+                if cfg["hooks"]["store_prompts"]:
+                    from ccr.history import prompts
+                    prompts.append(root, prompts.snapshot(
+                        rec["id"], task, d, t, "headless run", retry=bool(prev),
+                        escalated_from=prev.tier if prev else None,
+                        redact=cfg["hooks"]["redact_prompts"]))
             except OSError as e:
                 say(f"  ! could not write history: {e}")
         cost = f"${a.cost_usd:.4f}" if a.cost_usd is not None else "cost n/a"

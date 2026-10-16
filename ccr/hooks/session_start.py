@@ -71,6 +71,10 @@ def run(data: dict, root, cfg) -> str:
                                    "source": "session-start"}
             save_session(root, sid, s)
         sweep(root, sid)
+        days = int(cfg["hooks"]["prompt_retention_days"])
+        if days:
+            from ccr.history import prompts
+            prompts.prune_daily(root, days)
     except Exception as e:  # noqa: BLE001 - housekeeping must not cost the status line
         log(root, f"session-start housekeeping failed: {e.__class__.__name__}: {e}")
     if cfg.errors:

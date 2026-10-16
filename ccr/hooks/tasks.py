@@ -15,23 +15,17 @@ import re
 import time
 from pathlib import Path
 
+from ccr.evaluate.text import RETRY, is_retry  # noqa: F401  (re-exported)
 from ccr.hooks.common import SESSION_TTL_S, read_json, save_session, session_path
 import contextlib
 
-RETRY = re.compile(
-    r"\b(?:still\s+(?:fail\w*|broken|wrong|getting|erroring|crash\w*|red|"
-    r"not\s+(?:work\w*|fix\w*|pass\w*|right|correct|compil\w*|load\w*|show\w*|resolved)|"
-    r"the\s+same|happening|there|seeing)"
-    r"|(?:did\s*n[o']?t|does\s*n[o']?t|doesn'?t|didn'?t|isn'?t|is\s+not|wasn'?t)\s+"
-    r"(?:work\w*|fix\w*|help\w*|solve\w*|change\w*)"
-    r"|not\s+(?:fixed|working|solved|resolved)"
-    r"|same\s+(?:error|problem|issue|failure|exception|bug|result)"
-    r"|(?:that|this|it)\s+(?:broke|made\s+it\s+worse)"
-    r"|(?:try|do\s+it)\s+again|no\s+luck|wrong\s+again|regress\w*|nothing\s+changed"
-    r"|(?:tests?|build|ci)\s+(?:still\s+)?(?:fail\w*|red|broken))", re.I)
 FAIL_HINT = re.compile(
     r"\b(?:I\s+(?:was|am)\s+(?:unable|not\s+able)|I\s+(?:could|can)\s*n[o']?t|"
     r"(?:tests?|build)\s+(?:are\s+|is\s+)?still\s+failing|did\s+not\s+succeed)\b", re.I)
+REVERT = re.compile(
+    r"\b(?:revert\w*|roll\s*(?:it\s+)?back|undo\s+(?:that|it|this|the|all|everything)"
+    r"|scrap\s+(?:that|this|it)|start\s+over|never\s*mind"
+    r"|go\s+back\s+to\s+(?:the\s+)?(?:previous|original|before))\b", re.I)
 STALE_PENDING_S = 2 * 3600
 
 
@@ -82,8 +76,24 @@ def absorb(session: dict, main_path: str | None = None) -> None:
         task["signals"] = sorted(set(task.get("signals") or []) | {"tool_errors"})
 
 
-def is_retry(prompt: str) -> bool:
-    return bool(RETRY.search(prompt[:400]))
+def infer_outcome(prompt: str, session: dict, cfg, now: float | None = None) -> str | None:
+    """Outcome of the pending task, judged when the next prompt arrives. "The user moved on"
+    only counts as success when it plausibly was one:
+      retry phrase ("still failing")          failure
+      revert phrase ("undo that", "start over") abandoned (not counted by learning)
+      idle longer than hooks.success_gap_minutes since the last activity: unknown (None)
+      otherwise                                success"""
+    if is_retry(prompt):
+        return "failure"
+    if REVERT.search(prompt[:300]):
+        return "abandoned"
+    pend = session.get("pending") if isinstance(session.get("pending"), dict) else {}
+    task = session.get("task") if isinstance(session.get("task"), dict) else {}
+    last = float(task.get("last_ts") or pend.get("ts") or 0)
+    gap_s = int(cfg["hooks"]["success_gap_minutes"]) * 60
+    if last and (now or time.time()) - last > gap_s:
+        return None
+    return "success"
 
 
 def finalize(root: Path, sid: str | None, session: dict, outcome: str | None,

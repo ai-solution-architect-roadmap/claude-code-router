@@ -533,3 +533,24 @@ def test_usage_written_after_stop_is_caught_up(proj, tmp_path):
     rec = H.read(proj)[-1]
     assert rec["tokens"] == 10 and rec["outcome"] == "success" and rec["turns"] == 1
     assert session(proj)["main_model"]["id"] == "claude-haiku-4-5"
+
+
+def test_infer_outcome_is_stricter_than_user_moved_on():
+    import time
+    from ccr.config import load_config
+    from ccr.hooks.tasks import infer_outcome
+    cfg = load_config("/nonexistent")
+    now = time.time()
+    sess = {"pending": {"ts": now - 60}, "task": {"last_ts": now - 30}}
+    assert infer_outcome("now add a docs page", sess, cfg, now) == "success"
+    assert infer_outcome("it is still failing", sess, cfg, now) == "failure"
+    assert infer_outcome("actually, undo that and start over", sess, cfg, now) == "abandoned"
+    idle = {"pending": {"ts": now - 9 * 3600}, "task": {}}
+    assert infer_outcome("next thing please", idle, cfg, now) is None
+
+
+def test_follow_up_continues_the_previous_task(proj):
+    first = prompt(proj, "rework the payment flow in app/payments/ledger.py")
+    again = prompt(proj, "now do the same for refunds")
+    assert first.split()[1] == again.split()[1]          # same tier: it is the same piece of work
+    assert "Follow-up" in again

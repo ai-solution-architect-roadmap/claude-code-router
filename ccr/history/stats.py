@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from ccr.config import TIERS
 from ccr.history import savings
-from ccr.history.learn import FAILURE, SUCCESS, summarize
+from ccr.history.learn import FAILURE, SUCCESS, struggled, summarize
 
 
 def _bucket() -> dict:
@@ -88,6 +88,9 @@ def compute(records: list[dict], cfg) -> dict:
                   "by_source": {k: {"tasks": v["tasks"], "tokens": v["tokens"],
                                     "cost_usd": round(v["cost_usd"], 6)}
                                 for k, v in sorted(by_source.items())}},
+        "struggled": sum(1 for r in tasks if struggled(r, cfg["history"])),
+        "manual_escalations": sum("manual_model_up" in (r.get("signals") or ()) for r in tasks),
+        "possible_reworks": sum("possible_rework" in (r.get("signals") or ()) for r in tasks),
         "overall": {k: total[k] for k in ("success", "failure", "unknown", "escalated",
                                           "success_rate", "escalation_rate")},
         "tiers": tiers,
@@ -122,6 +125,7 @@ def _table(title: str, rows: dict, key_w: int, with_tiers: bool) -> list[str]:
 
 
 def format_text(s: dict, root=None, when=None, detail: bool = False) -> list[str]:
+    from ccr.history import shadow
     import time
     fmt = (lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))) if when is None \
         else when
@@ -142,7 +146,15 @@ def format_text(s: dict, root=None, when=None, detail: bool = False) -> list[str
     out.append(f"Outcomes:  {o['success']} ok, {o['failure']} failed, {o['unknown']} unknown; "
                f"success {_pct(o['success_rate'])}, escalated {o['escalated']} "
                f"({_pct(o['escalation_rate'])})")
+    if s.get("struggled"):
+        out.append(f"           {s['struggled']} success(es) struggled (many tool errors/turns or a "
+                   f"self-reported failure): learning counts them as failures")
+    if s.get("manual_escalations") or s.get("possible_reworks"):
+        out.append(f"           {s['manual_escalations']} manual move(s) to a stronger model, "
+                   f"{s['possible_reworks']} possible rework(s) after a cheap answer")
     out += savings.format_lines(s["savings"], s["misroutes"], detail)
+    if root is not None:
+        out += shadow.format_lines(shadow.summarize(shadow.read(root)))
     out.append("Tier distribution: " + "  ".join(
         f"{t} {b['tasks']} ({_pct(b['share'])})" for t, b in s["tiers"].items()))
     out.append("Per tier:")
