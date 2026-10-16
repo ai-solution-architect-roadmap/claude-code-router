@@ -80,6 +80,21 @@ SPECS = [
         "auth/payments/migrations/infra/secrets, stop and report so the caller can escalate."
         f"\n\n{_REPORT}"),
     AgentSpec(
+        "ccr-senior", "T2H",
+        "Stronger sonnet for work that outgrew ccr-implement but is not a design or "
+        "critical-path problem: risky multi-file changes, tricky bugs with a plausible "
+        "cause, performance fixes in complex code. Use proactively when ccr routes a task "
+        "to T2H.",
+        "Read, Grep, Glob, Bash, Edit, Write, NotebookEdit, WebFetch",
+        "You handle multi-file changes in complex or fragile code.\n\n"
+        "1. Read the code paths and tests involved; check callers before changing a signature.\n"
+        "2. Form a hypothesis for bugs and verify it before editing.\n"
+        "3. Implement end to end with tests for the edge cases, and run them.\n"
+        "4. Keep the diff focused.\n\n"
+        "If the root cause stays unclear, a real design trade-off appears, or the change "
+        "reaches auth/payments/migrations/infra/secrets, stop and report so the caller can "
+        f"escalate.\n\n{_REPORT}"),
+    AgentSpec(
         "ccr-architect", "T3",
         "Senior engineer for design, unclear or intermittent bugs, performance, migrations "
         "and security-sensitive work: investigates first, then implements or proposes a "

@@ -216,7 +216,7 @@ def test_llm_called_only_below_threshold(route_env):
     assert "[~$0.0012]" in d.llm
     assert any(c.path == "app/core/engine.py" and "suggested by LLM" in c.reasons
                for c in d.location.candidates)
-    assert d.tier.name == "T3"   # refactor T2 + large scope
+    assert d.tier.name == "T2H"   # refactor T2 + large scope
 
     sure = FakeRunner(json.dumps({"class": "bugfix"}))
     d = decide("Fix the off-by-one error in paginate() in app/api/pagination.py", root,
@@ -406,7 +406,7 @@ def test_terse_unclassified_task_on_impactful_code_goes_up(route_env):
     quiet = _decide(route_env, "shop_py", "tweak app/reports/export.py")
     wide = _decide(route_env, "shop_py", "tweak app/utils/strings.py")
     assert quiet.tier.name == "T2" and not quiet.bumps
-    assert wide.tier.name == "T3" and wide.bumps == ["unclassified task on impactful code"]
+    assert wide.tier.name == "T2H" and wide.bumps == ["unclassified task on impactful code"]
     # a cue word or an explicit plan means the prompt did say how hard it is
     assert not any("unclassified" in r for r in
                    _decide(route_env, "shop_py", "add a flag to app/utils/strings.py").reasons)
@@ -416,4 +416,4 @@ def test_trace_carries_the_rules_that_fired(route_env):
     d = _decide(route_env, "shop_py", "fix login sometimes failing")
     tr = d.trace()
     assert "fix" in tr["rules"] and tr["hard_terms"] == ["sometimes"]
-    assert any(b.startswith("hard problem") for b in tr["bumps"])
+    assert tr["base"] == "T3"        # no code located: a bug report is explored as debugging

@@ -170,3 +170,21 @@ def _uniq(items) -> list:
             seen.add(x)
             out.append(x)
     return out
+
+
+RETRY = re.compile(
+    r"\b(?:still\s+(?:fail\w*|broken|wrong|getting|erroring|crash\w*|red|"
+    r"not\s+(?:work\w*|fix\w*|pass\w*|right|correct|compil\w*|load\w*|show\w*|resolved)|"
+    r"the\s+same|happening|there|seeing)"
+    r"|(?:did\s*n[o']?t|does\s*n[o']?t|doesn'?t|didn'?t|isn'?t|is\s+not|wasn'?t)\s+"
+    r"(?:work\w*|fix\w*|help\w*|solve\w*|change\w*)"
+    r"|not\s+(?:fixed|working|solved|resolved)"
+    r"|same\s+(?:error|problem|issue|failure|exception|bug|result)"
+    r"|(?:that|this|it)\s+(?:broke|made\s+it\s+worse)"
+    r"|(?:try|do\s+it)\s+again|no\s+luck|wrong\s+again|regress\w*|nothing\s+changed"
+    r"|(?:tests?|build|ci)\s+(?:still\s+)?(?:fail\w*|red|broken))", re.I)
+
+
+def is_retry(prompt: str) -> bool:
+    """"still failing", "that did not work": a follow-up about the previous attempt."""
+    return bool(RETRY.search(prompt[:400]))

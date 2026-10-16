@@ -4,7 +4,7 @@ history."""
 import pytest
 
 from ccr.cli import format_decision
-from ccr.config import default_config
+from ccr.config import TIERS, default_config
 from ccr.graph import Graph
 from ccr.route import decide
 
@@ -18,7 +18,7 @@ CASES = [
     ("shop_py", "Fix the off-by-one error in paginate() in app/api/pagination.py; the last "
                 "page is dropped", "T1", "bugfix"),
     ("shop_py", "Add a CSV export option to app/reports/export.py", "T2", "feature"),
-    ("shop_py", "Refactor Engine.run into smaller functions without changing behaviour", "T3",
+    ("shop_py", "Refactor Engine.run into smaller functions without changing behaviour", "T2H",
      "refactor"),
     ("shop_py", "Fix the bug where refunds in the payment ledger are double counted", "T4",
      "bugfix"),
@@ -64,7 +64,7 @@ CASES = [
     ("svc_go", "Add a unit test for store.Get when the key is missing", "T1", "tests"),
     ("svc_go", "Bump the Go version in go.mod to 1.22", "T0", "trivial"),
     ("svc_go", "Find out why memory usage keeps growing in the server", "T3", "debugging"),
-    ("svc_go", "something is broken, fix it", "T2", "bugfix"),
+    ("svc_go", "something is broken, fix it", "T3", "debugging"),   # names no code: explore first
     ("svc_go", "Do a security review of the whole codebase for injection and XSS issues", "T3",
      "security"),
     ("java", "Rename Helper to StringHelper everywhere", "T1", "trivial"),
@@ -88,7 +88,7 @@ def _decide(route_env, repo, task, **kw):
 def test_table_is_large_and_multilingual():
     assert len(CASES) >= 25
     assert {r for r, *_ in CASES} >= {"shop_py", "web_ts", "svc_go", "java", "rust"}
-    assert {t for *_, t, _ in CASES} == {"T0", "T1", "T2", "T3", "T4"}
+    assert {t for *_, t, _ in CASES} >= {"T0", "T1", "T2", "T3", "T4"}
 
 
 @pytest.mark.parametrize("repo,task,tier,kind", CASES, ids=[f"{c[0]}:{c[1][:40]}" for c in CASES])
@@ -189,11 +189,12 @@ def test_three_signals_climb_two_tiers(monkeypatch, tmp_path):
     tc.kind = "bugfix"                      # base T1
     cfg = default_config()
     cfg.data["routing"]["ceiling_without_critical"] = "T4"
-    d = _route(tc, Location(), risk, Budget(), [], cfg, 0.9)
+    loc = Location(confidence=0.9)
+    d = _route(tc, loc, risk, Budget(), [], cfg, 0.9)
     assert d.base == "T1" and d.tier.name == "T3"
     assert any(r.startswith("+2:") for r in d.reasons)
     cfg.data["routing"]["max_escalation"] = 1
-    assert _route(tc, Location(), risk, Budget(), [], cfg, 0.9).tier.name == "T2"
+    assert _route(tc, loc, risk, Budget(), [], cfg, 0.9).tier.name == "T2"
 
 
 def test_decision_record_and_dict_agree(tmp_path):
@@ -205,3 +206,10 @@ def test_decision_record_and_dict_agree(tmp_path):
     assert rec["class"] == full["class"]["kind"]
     assert set(rec["trace"]) >= {"base", "scope", "bumps", "hard_terms", "elapsed_ms"}
     assert set(full) >= {"tier", "model", "effort", "agent", "reasons", "risk", "budget", "location"}
+
+
+def test_t2h_is_a_half_step_only_a_single_signal_lands_on():
+    from ccr.route import _climb
+    names = lambda t, n: TIERS[_climb(TIERS.index(t), n)]  # noqa: E731
+    assert names("T2", 1) == "T2H" and names("T2H", 1) == "T3"
+    assert names("T1", 2) == "T3" and names("T0", 2) == "T2" and names("T2", 2) == "T4"

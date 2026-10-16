@@ -151,7 +151,7 @@ def _route(route_env, repo, task, budget):
 
 @pytest.mark.parametrize("repo,task,normal,pressured", [
     ("svc_go", "Add a /healthz endpoint to the router in internal/http/router.go", "T2", "T1"),
-    ("shop_py", "Refactor Engine.run into smaller functions without changing behaviour", "T3",
+    ("shop_py", "Refactor Engine.run into smaller functions without changing behaviour", "T2H",
      "T2"),
     ("web_ts", "Fix the bug where formatPrice shows NaN for zero amounts", "T1", "T0"),
     ("shop_py", "What does Engine.run do?", "T0", "T0"),                       # floor

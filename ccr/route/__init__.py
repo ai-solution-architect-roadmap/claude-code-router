@@ -14,10 +14,10 @@ Policy (all thresholds in .ccr/config.yaml):
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from ccr.config import TIERS, Config, Tier, load_config
+from ccr.config import TIERS, TOP, Config, Tier, load_config
 from ccr.evaluate.classify import TaskClass, classify
 from ccr.evaluate.locate import Candidate, Location, locate
 from ccr.evaluate.risk import Risk, assess_risk
@@ -25,7 +25,7 @@ from ccr.route.budget import Budget, budget_pressure
 
 CHANGE = {"trivial", "tests", "bugfix", "feature", "refactor", "perf", "migration", "security",
           "debugging"}
-SUBSTANTIVE = CHANGE - {"trivial"}
+SUBSTANTIVE = (CHANGE - {"trivial"}) | {"design"}   # design: plans and architecture, no edit
 DEEP_COMPLEXITY = 0.6    # complexity component at which code counts as hard to change
 UNSURE_CLASS = 0.4       # class confidence below this, with no cue words, is a guess
 DEEP_SUPPORT = 0.4       # blast radius / missing-test level that makes complex code risky
@@ -50,6 +50,7 @@ class Decision:
     notes: list[str] = field(default_factory=list)
     bumps: list[str] = field(default_factory=list)   # names of the +1 signals that fired
     elapsed_ms: float = 0.0
+    reclassed: bool = False     # an unanchored bug report was routed as debugging
 
     def record(self) -> dict:
         """History fields for this decision (no prompt text)."""
@@ -238,6 +239,7 @@ def _impactful(risk: Risk) -> str | None:
 _NO_DOWN = {"migration", "security", "debugging"}
 _CRITICAL_UP = ("critical path", "memory flags")
 _WORDING_UP = ("hard problem", "vague bug", "large scope")
+_SWEEPING_UP = "sweeping change"
 
 
 def _scope_label(tc: TaskClass) -> str:
@@ -253,9 +255,20 @@ def _up_large_scope(tc, loc, risk):
         return f"large scope ({_scope_label(tc)})"
 
 
+VAGUE_BUG_WORDS = 8          # a short bug report that names no file or function
+
+
 def _up_vague_bug(tc, loc, risk):
-    if tc.vague and tc.kind == "bugfix":
-        return f"vague bug report (vagueness {tc.vagueness:.2f}): needs exploration"
+    bare = len(tc.scope_terms) == 0 and not (loc.explicit or loc.symbols or tc.steps) \
+        and tc.words <= VAGUE_BUG_WORDS
+    if tc.kind == "bugfix" and (tc.vague or bare):
+        why = (f"vagueness {tc.vagueness:.2f}" if tc.vague else "names no file or function")
+        return f"vague bug report ({why}): needs exploration"
+
+
+def _up_sweeping(tc, loc, risk):
+    if tc.sweeping and tc.kind in ("refactor", "migration", "feature", "perf"):
+        return f"sweeping change ({', '.join(tc.sweeping[:2])}): needs a plan"
 
 
 def _up_hard_problem(tc, loc, risk):
@@ -301,7 +314,7 @@ def _down_explicit_steps(tc, loc, risk):
         return f"explicit step-by-step instructions ({tc.steps} steps)"
 
 
-_UP_RULES = (_up_large_scope, _up_vague_bug, _up_hard_problem, _up_code_difficulty,
+_UP_RULES = (_up_large_scope, _up_sweeping, _up_vague_bug, _up_hard_problem, _up_code_difficulty,
              _up_critical_path, _up_memory_flags)
 _DOWN_RULES = (_down_small_scope, _down_explicit_steps)
 
@@ -311,6 +324,18 @@ def _signals(tc: TaskClass, loc: Location, risk: Risk) -> tuple[list[str], list[
     ups = [r for rule in _UP_RULES if (r := rule(tc, loc, risk))]
     downs = [r for rule in _DOWN_RULES if (r := rule(tc, loc, risk))]
     return ups, downs
+
+
+_HALF = TIERS.index("T2H")
+
+
+def _climb(tier: int, step: int) -> int:
+    """`tier` raised by `step` signals. T2H is a half step between T2 and T3: a single +1 from
+    T2 lands on it, but a +2 jumps over it so strong signals still reach the same tier as before."""
+    pos = tier + step
+    if step > 1 and tier < _HALF <= pos:
+        pos += 1
+    return pos
 
 
 def _escalate(tier: int, ups: list[str], max_esc: int, reasons: list[str]) -> int:
@@ -325,10 +350,12 @@ def _escalate(tier: int, ups: list[str], max_esc: int, reasons: list[str]) -> in
     # count as two opinions.
     crit = any(u.startswith(_CRITICAL_UP) for u in ups)
     wording = any(u.startswith(_WORDING_UP) for u in ups)
-    step = 2 if (len(ups) >= 3 or crit and wording) and max_esc >= 2 else 1
+    sweeping = any(u.startswith(_SWEEPING_UP) for u in ups)
+    step = 2 if (len(ups) >= 3 or crit and wording or sweeping) and max_esc >= 2 else 1
     reasons.append(f"+{step}: " + "; ".join(ups)
                    + (" (escalation capped at one tier)" if len(ups) > 1 and step == 1 else ""))
-    return tier + step
+    new = _climb(tier, step)
+    return new + 1 if crit and new == _HALF else new      # a critical path never stops at T2H
 
 
 def _descend(tier: int, downs: list[str], kind: str, critical_up: bool, reasons: list[str]) -> int:
@@ -388,10 +415,17 @@ def _t4_risky_critical_code(tc, risk, cfg, found):
                 f"{risk.code_risk:.2f}")
 
 
+_WIPE = ("wipe", "purge", "truncat", "delete all", "delete every", "remove all", "remove every",
+         "erase", "clear all", "empty all", "drop")
+
+
 def _t4_production_migration(tc, risk, cfg, found):
-    prod = [t for t in tc.destructive if "prod" in t or "live data" in t]
-    if tc.kind == "migration" and prod and not found:
-        return f"destructive migration against production ({', '.join(tc.destructive[:2])})"
+    """Destroying data in production, whatever the task was classed as."""
+    prod = [t for t in tc.destructive if "prod" in t or "live" in t]
+    wipe = [t for t in tc.destructive if t.startswith(_WIPE)]
+    if tc.kind in SUBSTANTIVE - {"tests", "design"} and prod and (wipe or tc.kind == "migration") \
+            and not found:
+        return f"destructive change against production ({', '.join(tc.destructive[:2])})"
 
 
 _T4_RULES = (_t4_security, _t4_destructive_migration, _t4_memory_marked,
@@ -411,7 +445,7 @@ def _t4_rules(tc: TaskClass, risk: Risk, cfg: Config) -> list[str]:
 def _under_budget(tier: int, t4: list[str], risk: Risk, budget: Budget, reasons: list[str]) -> int:
     if not budget.pressure:
         return tier
-    if t4 or tier >= 4:
+    if t4 or tier >= TOP:
         reasons.append(f"budget pressure ({budget.used_pct:.0f}%): T4 is never downgraded")
     elif risk.critical:
         reasons.append(f"budget pressure ({budget.used_pct:.0f}%): critical path, no downgrade")
@@ -424,8 +458,21 @@ def _under_budget(tier: int, t4: list[str], risk: Risk, budget: Budget, reasons:
     return tier
 
 
+def _unanchored_bug(tc: TaskClass, loc: Location) -> TaskClass:
+    """A bug report that names no code we can find says nothing about where or why: treat it
+    as a debugging task (exploration first) instead of a routine fix."""
+    if tc.kind == "bugfix" and tc.source == "rules" and not loc.located and not tc.steps:
+        both = tc.matched.get("bugfix", []) + tc.matched.get("debugging", [])
+        return replace(tc, kind="debugging", matched={**tc.matched, "debugging": both})
+    return tc
+
+
 def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: list[dict],
            cfg: Config, conf: float) -> Decision:
+    reclassed = _unanchored_bug(tc, loc)
+    note = ["bug report names no code ccr can find: treated as debugging (explore first)"] \
+        if reclassed is not tc else []
+    tc = reclassed
     kind = tc.kind
     base_name = cfg["class_base"][kind]
     base = TIERS.index(base_name)
@@ -433,7 +480,7 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     ceiling = TIERS.index(cfg["routing"]["ceiling_without_critical"])
     reasons = [f"base {base_name} for {kind}"
                + (f" (matched {tc.evidence()})" if tc.evidence() else "")
-               + (" [class from LLM]" if tc.source == "llm" else "")]
+               + (" [class from LLM]" if tc.source == "llm" else "")] + note
 
     ups, downs = _signals(tc, loc, risk)
     critical_up = any(u.startswith(_CRITICAL_UP) for u in ups)
@@ -450,7 +497,7 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
                        and (risk.level == "low"
                             or risk.level == "unknown" and kind not in SUBSTANTIVE))
     learned = learn.adjust(tier, kind=kind, area=area, records=records, cfg=cfg,
-                           cap=min(base + max_esc, ceiling),
+                           cap=min(_climb(base, max_esc), ceiling),
                            floor=1 if kind in SUBSTANTIVE else 0, critical=on_critical,
                            low_risk_simple=low_risk_simple)
     tier = learned.tier
@@ -463,13 +510,13 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
 
     t4 = _t4_rules(tc, risk, cfg)
     if t4:
-        if tier < 4:
+        if tier < TOP:
             reasons.append(f"T4 rule: {'; '.join(t4)} -> T4")
-        tier = 4
+        tier = TOP
 
     tier = _under_budget(tier, t4, risk, budget, reasons)
 
-    if conf < float(cfg["llm"]["threshold"]) and tier < 4:
+    if conf < float(cfg["llm"]["threshold"]) and tier < TOP:
         reasons.append(f"low confidence ({conf:.2f}): starting low; escalate one tier "
                        f"if the result falls short")
     t = cfg.tier(tier)
@@ -477,4 +524,4 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     return Decision(task_class=tc, location=loc, risk=risk, budget=budget, tier=t,
                     base=base_name, confidence=conf, reasons=reasons, t4_rules=t4,
                     history=learned.note, area=area,
-                    bumps=[u.split(" (")[0] for u in ups])
+                    bumps=[u.split(" (")[0] for u in ups], reclassed=bool(note))

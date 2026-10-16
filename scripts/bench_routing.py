@@ -18,35 +18,35 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-# (prompt, need, cap): tier indexes, T0=0 .. T4=4
+# (prompt, need, cap): tier names (an int indexes ccr.config.TIERS)
 PROMPTS = [
-    ("where is the pagination helper defined?", 0, 1),
-    ("fix the typo in the README where it says 'recieve'", 0, 1),
+    ("where is the pagination helper defined?", "T0", "T1"),
+    ("fix the typo in the README where it says 'recieve'", "T0", "T1"),
     ("Please could you have a look at the README, which a few of us have been editing for "
-     "weeks, and fix the single typo 'recieve' in the intro paragraph", 0, 1),
-    ("add a test for the pagination helper", 1, 2),
-    ("fix the off-by-one error in paginate() in app/api/pagination.py", 1, 2),
-    ("add a CSV export option to app/reports/export.py", 2, 3),
-    ("refactor app/core/engine.py into smaller functions", 2, 3),
-    ("fix login sometimes failing", 3, 4),
-    ("the sync job fails intermittently, figure out why", 3, 3),
-    ("the checkout flow intermittently double charges customers, figure out why", 3, 4),
-    ("rework the payment flow", 3, 4),
-    ("drop the legacy_id column from the users table in production", 4, 4),
-    ("what does the Engine class do?", 0, 1),
-    ("rename the helper in app/utils/strings.py", 0, 1),
-    ("write unit tests for app/utils/strings.py", 1, 2),
-    ("fix the typo in the docstring of paginate()", 0, 1),
-    ("add a --dry-run flag to app/main.py", 1, 2),
-    ("speed up the report export, it is slow for large datasets", 2, 3),
-    ("rotate the signing key used for login tokens", 3, 4),
-    ("investigate why refunds are sometimes applied twice", 3, 4),
-    ("the export job occasionally hangs, find the root cause", 3, 3),
-    ("fix the bug where the page size is ignored in app/api/handlers.py", 1, 2),
-    ("migrate the orders table to add a status column", 3, 4),
-    ("harden the session token validation", 3, 4),
-    ("tidy up app/reports/export.py", 1, 2),
-    ("1. add a --verbose flag to app/main.py\n2. pass it to Engine\n3. add a test", 1, 2),
+     "weeks, and fix the single typo 'recieve' in the intro paragraph", "T0", "T1"),
+    ("add a test for the pagination helper", "T1", "T2"),
+    ("fix the off-by-one error in paginate() in app/api/pagination.py", "T1", "T2"),
+    ("add a CSV export option to app/reports/export.py", "T2", "T3"),
+    ("refactor app/core/engine.py into smaller functions", "T2", "T3"),
+    ("fix login sometimes failing", "T3", "T4"),
+    ("the sync job fails intermittently, figure out why", "T3", "T3"),
+    ("the checkout flow intermittently double charges customers, figure out why", "T3", "T4"),
+    ("rework the payment flow", "T3", "T4"),
+    ("drop the legacy_id column from the users table in production", "T4", "T4"),
+    ("what does the Engine class do?", "T0", "T1"),
+    ("rename the helper in app/utils/strings.py", "T0", "T1"),
+    ("write unit tests for app/utils/strings.py", "T1", "T2"),
+    ("fix the typo in the docstring of paginate()", "T0", "T1"),
+    ("add a --dry-run flag to app/main.py", "T1", "T2"),
+    ("speed up the report export, it is slow for large datasets", "T2", "T3"),
+    ("rotate the signing key used for login tokens", "T3", "T4"),
+    ("investigate why refunds are sometimes applied twice", "T3", "T4"),
+    ("the export job occasionally hangs, find the root cause", "T3", "T3"),
+    ("fix the bug where the page size is ignored in app/api/handlers.py", "T1", "T2"),
+    ("migrate the orders table to add a status column", "T3", "T4"),
+    ("harden the session token validation", "T3", "T4"),
+    ("tidy up app/reports/export.py", "T1", "T2"),
+    ("1. add a --verbose flag to app/main.py\n2. pass it to Engine\n3. add a test", "T1", "T2"),
 ]
 
 
@@ -62,10 +62,10 @@ def setup() -> Path:
 
 
 def load_prompts(path: str | None) -> list:
-    """PROMPTS, or a JSON file of [prompt, need, cap] triples (tier numbers 0-4)."""
+    """PROMPTS, or a JSON file of [prompt, need, cap] triples (tier names or indexes)."""
     if not path:
         return PROMPTS
-    return [(p, int(a), int(b)) for p, a, b in json.loads(Path(path).read_text())]
+    return [(p, a, b) for p, a, b in json.loads(Path(path).read_text())]
 
 
 def replay(root: Path, tokens: int = 50_000, prompts: list | None = None) -> dict:
@@ -77,8 +77,13 @@ def replay(root: Path, tokens: int = 50_000, prompts: list | None = None) -> dic
     cfg = default_config()
     memory = collect(root, nested=False)
     rows = []
+
+    def idx(t) -> int:
+        return t if isinstance(t, int) else TIERS.index(t)
+
     with Graph.open(root) as g:
         for prompt, need, cap in prompts or PROMPTS:
+            need, cap = idx(need), idx(cap)
             d = decide(prompt, root, cfg=cfg, graph=g, memory=memory, history_records=[], now=0,
                        nested_memory=False)
             i = TIERS.index(d.tier.name)

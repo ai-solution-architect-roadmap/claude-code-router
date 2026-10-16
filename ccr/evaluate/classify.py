@@ -22,10 +22,11 @@ _POLITE = re.compile(
 # class -> [(pattern, weight)]
 RULES: dict[str, list[tuple[re.Pattern, float]]] = {
     "question": [
-        (re.compile(r"^\s*(?:what|where|which|who|when|how|is|are|does|do\s+(?:i|we|you)|"
+        (re.compile(r"^\s*(?:what|where|which|who|when|how|wheres|where'?s|what'?s|how'?s|is|are|does|do\s+(?:i|we|you)|"
                     r"did|can\s+(?:i|we)|should\s+(?:i|we)|explain|describe|summari[sz]e|"
                     r"tell\s+me|show\s+me|list|walk\s+me\s+through)\b", _I), 2.0),
         (re.compile(r"\?\s*$"), 1.5),
+        (re.compile(r"^\s*(?:help|hi|hello|hey)\s*[!?.]*\s*$", _I), 4.0),
         (re.compile(r"\b(?:explain|describe|summari[sz]e|walk\s+me\s+through|overview\s+of|"
                     r"what\s+does|how\s+does|how\s+do(?:es)?\s+\w+\s+work|where\s+is|where\s+are|"
                     r"which\s+files?|find\s+where|look\s+up|understand|what\s+is|what\s+are|"
@@ -37,6 +38,12 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"lint(?:ing)?|bump|version\s+number|copy\s?text|label|colou?r|"
                     r"log\s+message|sort\s+imports|import\s+order|unused\s+imports?|"
                     r"dead\s+code|one[- ]liner|license\s+header|todo)\b", _I), 2.0),
+        (re.compile(r"\b(?:add|delete|remove|drop)\s+(?:a\s+|an\s+|the\s+)?(?:short\s+|trailing\s+|blank\s+)?"
+                    r"(?:comments?|docstrings?|type\s+hints?|newlines?|blank\s+lines?|whitespace|"
+                    r"license\s+header|commented[- ]out\s+code)\b|\bcommented[- ]out\b|"
+                    r"\btrailing\s+(?:newline|whitespace)\b", _I), 3.0),
+        (re.compile(r"\b(?:change|update|set|fix)\s+(?:the\s+)?(?:[\w-]+\s+){0,2}?"
+                    r"(?:text|label|title|wording|copy|colou?r)\b|\bcapitali[sz]\w*|\bwording\b", _I), 3.0),
     ],
     "tests": [
         (re.compile(r"\b(?:add|write|create|increase|improve|extend|cover)\b[\w\s,-]{0,40}?"
@@ -67,6 +74,10 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"\s+(?:to|into)|move\s+from\s+\w+\s+to|switch\s+(?:from|over)|"
                     r"schema\s+changes?|alter\s+table|alembic|backfill\w*|deprecat\w*)\b",
                     _I), 3.5),
+        # schema changes in plain words: "add a nullable notes column to products"
+        (re.compile(r"\b(?:add|create|drop|remove|rename|alter|change)\b[\w\s,'\"-]{0,30}?"
+                    r"\b(?:columns?|tables?|unique\s+constraints?|foreign\s+keys?|primary\s+keys?|"
+                    r"constraints?|index(?:es)?\s+(?:on|to|for)|indices)\b", _I), 3.5),
         # dropping schema objects is a migration even without the word
         (re.compile(r"\b(?:drop|truncate)\s+(?:the\s+)?(?:[\w.]+\s+){0,3}?"
                     r"(?:columns?|tables?|databases?|schemas?)\b", _I), 3.5),
@@ -76,6 +87,10 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"ssrf|injection|sqli|rce|sanitiz\w*|privilege\s+escalation|hard-?cod\w*|"
                     r"leak(?:s|ed|ing)?\s+(?:secrets?|credentials?|tokens?|keys?|pii)|"
                     r"audit|pen-?test\w*|threat\s+model)\b", _I), 3.0),
+        (re.compile(r"\b(?:session\s+fixation|fixation|csrf|clickjack\w*|brute[- ]?force|"
+                    r"lock\s*down|access\s+control|authori[sz]\w*|rate[- ]limit\w*|"
+                    r"tokens?\s+(?:never\s+)?expir\w*|admin\s+routes?|two[- ]factor|2fa|mfa)\b",
+                    _I), 4.0),
         (re.compile(r"\b(?:auth\w*|permissions?|secrets?|credentials?|passwords?|encrypt\w*|"
                     r"decrypt\w*|crypto\w*|jwt|signature\s+verification|rotate|tls|cors|"
                     r"api\s+keys?)\b", _I), 1.0),
@@ -93,6 +108,23 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"can'?t\s+reproduce|non-?deterministic\w*|keeps?\s+(?:growing|crashing|"
                     r"failing))\b", _I), 3.0),
         (re.compile(r"^\s*why\b", _I), 2.0),
+        # symptoms with no cause named: the work is finding out what is wrong
+        (re.compile(r"\b(?:no\s+idea\s+why|(?:do\s?n'?t|not)\s+(?:know|sure)\s+why|at\s+random|"
+                    r"random\s+\w+|now\s+and\s+then|at\s+times|(?:do(?:es)?n'?t|do(?:es)?\s+not)\s+add\s+up|"
+                    r"numbers?\s+(?:are\s+|look\s+)?(?:off|wrong)|(?:feels?|seems?|looks?)\s+(?:off|broken|wrong)|"
+                    r"(?:wrong|incorrect|off)\s+(?:totals?|numbers?|amounts?)|keeps?\s+\w+ing|"
+                    r"breaks?\s+again|users?\s+(?:are\s+|keep\s+)?(?:report|complain)\w*|customers?\s+(?:report|complain|see|get)\w*|"
+                    r"duplicate\s+\w+|twice)\b", _I), 3.0),
+    ],
+    "design": [
+        (re.compile(r"\b(?:design|outline|sketch|propose|draft)\s+(?:me\s+)?(?:a|an|the|how)\b|"
+                    r"\b(?:architecture|design|rollout|roadmap|migration|adoption)\s+(?:plan|for|of)\b|"
+                    r"\b(?:come\s+up\s+with|give\s+me|write)\s+(?:a\s+)?(?:plan|strategy|design|roadmap)\b|"
+                    r"\bhow\s+(?:should|could|would)\s+(?:we|you|i)\s+(?:structure|split|design|organi[sz]e|"
+                    r"migrate|handle|approach|architect|build|support)\b|"
+                    r"\bbest\s+(?:way|approach)\s+to\s+(?:add|build|structure|support|handle|implement)\b|"
+                    r"\bwhat\s+would\s+a\s+good\s+(?:architecture|design|approach)\b|"
+                    r"\b(?:strategy|plan)\s+for\b", _I), 4.0),
     ],
 }
 
@@ -110,10 +142,17 @@ LEAD_VERB = [
     (re.compile(r"^\s*(?:rename|bump|reformat|format|reword|update\s+the\s+(?:readme|docs?|"
                 r"changelog|comment))\b", _I), "trivial", 1.5),
     (re.compile(r"^\s*(?:audit|harden|secure)\b", _I), "security", 1.5),
+    (re.compile(r"^\s*(?:plan|design|architect)\b", _I), "design", 1.5),
 ]
 
+SWEEPING = re.compile(
+    r"\b(?:everything|everywhere|the\s+whole\s+(?:thing|app|backend|frontend|stack|project)|"
+    r"rewrite\s+(?:the\s+)?(?:web\s+)?(?:app|backend|frontend|site)\b|all\s+(?:of\s+)?the\s+code|"
+    r"monorepo|micro-?services?|serverless|multi[- ]?region|"
+    r"entire\s+(?:app|backend|frontend|codebase|project))\b", _I)
 SCOPE_LARGE = re.compile(
-    r"\b(?:entire|whole|everywhere|codebase|code\s+base|project-?wide|repo(?:sitory)?-?wide|"
+    r"\b(?:everything|multi[- ]?region|monorepo|micro-?services?|serverless|"
+    r"entire|whole|everywhere|codebase|code\s+base|project-?wide|repo(?:sitory)?-?wide|"
     r"system-?wide|throughout|globally|all\s+over|architecture|overall|"
     r"across\s+(?:the\s+)?(?:codebase|project|repo|app|services|modules|packages|files)|"
     r"all\s+(?:the\s+)?(?:files|modules|components|endpoints|services|tests|usages|call\s?sites|"
@@ -125,8 +164,11 @@ SCOPE_SMALL = re.compile(
     r"a\s+few\s+lines|slight(?:ly)?)\b", _I)
 DESTRUCTIVE = re.compile(
     r"\b(?:drop(?:s|ping|ped)?\s+(?:the\s+)?(?:[\w.]+\s+){0,3}?(?:columns?|tables?|"
-    r"index(?:es)?|databases?|collections?|fields?|schemas?|users?|records?|rows?)|truncat\w*|irreversibl\w*|backfill\w*|in\s+production|"
-    r"production\s+data|prod\s+data|live\s+data|wipe|purge|delete\s+all|remove\s+all|"
+    r"index(?:es)?|databases?|collections?|fields?|schemas?|users?|records?|rows?)|truncat\w*|"
+    r"irreversibl\w*|backfill\w*|in\s+production|"
+    r"(?:on|in|against|from)\s+(?:the\s+)?(?:prod|production|live)\b|"
+    r"production\s+(?:data|database|db)|live\s+(?:data|db|database)|prod\s+(?:data|db)|"
+    r"wipe|purge|(?:delete|remove|erase|clear|empty)\s+(?:all|every)|"
     r"force[- ]push|rewrite\s+history|data\s+loss)\b", _I)
 HARD = re.compile(
     r"\b(?:race\s+conditions?|data\s+races?|deadlock\w*|concurren\w*|thread[- ]safe\w*|"
@@ -169,6 +211,8 @@ class TaskClass:
     vagueness: float = 0.0
     vague_terms: list[str] = field(default_factory=list)
     destructive: list[str] = field(default_factory=list)
+    sweeping: list[str] = field(default_factory=list)
+    words: int = 0
     hard: list[str] = field(default_factory=list)
     source: str = "rules"                # rules | llm
 
@@ -262,12 +306,13 @@ def classify(task: str, located: bool | None = None,
     return TaskClass(kind=kind, confidence=round(conf, 3), scores=scores, matched=matched,
                      secondary=secondary, scope=scope, scope_terms=large + small, steps=steps,
                      vagueness=v, vague_terms=vterms, destructive=_hits(DESTRUCTIVE, body),
-                     hard=hard)
+                     sweeping=_hits(SWEEPING, body), hard=hard,
+                     words=len(raw.split()))
 
 
 # tie-break order: prefer the cheaper interpretation ("start low")
 _PRIORITY = ["question", "trivial", "tests", "bugfix", "feature", "refactor", "perf",
-             "migration", "debugging", "security"]
+             "migration", "debugging", "design", "security"]
 
 
 def _vagueness(raw: str, body: str, located: bool | None,

@@ -11,12 +11,15 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-TIERS = ("T0", "T1", "T2", "T3", "T4")
+# Ordered cheapest -> strongest. T2H sits between T2 and T3 (sonnet/high) so it keeps every
+# existing tier name (history records, class_base, user configs) valid.
+TIERS = ("T0", "T1", "T2", "T2H", "T3", "T4")
+TOP = len(TIERS) - 1
 # The `effortLevel` setting accepts only these (subagent frontmatter also allows `max`).
 EFFORTS = ("low", "medium", "high", "xhigh")
 MODEL_ALIASES = ("haiku", "sonnet", "opus", "fable")
 CLASSES = ("question", "trivial", "tests", "bugfix", "feature", "refactor", "perf", "migration",
-           "security", "debugging")
+           "security", "debugging", "design")
 _MODEL_ID = re.compile(r"^claude-[a-z0-9][a-z0-9.\-]*(\[1m\])?$")
 _AGENT = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
@@ -25,6 +28,7 @@ DEFAULTS: dict = {
         "T0": {"model": "haiku", "effort": "low", "agent": "ccr-quick"},
         "T1": {"model": "sonnet", "effort": "low", "agent": "ccr-small"},
         "T2": {"model": "sonnet", "effort": "medium", "agent": "ccr-implement"},
+        "T2H": {"model": "sonnet", "effort": "high", "agent": "ccr-senior"},
         "T3": {"model": "opus", "effort": "high", "agent": "ccr-architect"},
         "T4": {"model": "opus", "effort": "xhigh", "agent": "ccr-critical"},
     },
@@ -32,6 +36,7 @@ DEFAULTS: dict = {
     "class_base": {
         "question": "T0", "trivial": "T0", "tests": "T1", "bugfix": "T1", "feature": "T2",
         "refactor": "T2", "perf": "T2", "migration": "T3", "security": "T3", "debugging": "T3",
+        "design": "T3",
     },
     # Critical-path globs per group. `**` spans directories, `*` does not; a pattern without
     # `/` matches the basename. Matching is case-insensitive. Set a group to [] to disable it.
@@ -98,6 +103,9 @@ DEFAULTS: dict = {
         "fail_rate_up": 0.5,         # >= this failure rate at the chosen tier -> +1
         "success_rate_down": 0.8,    # >= this success rate one tier lower -> -1
         "window_days": 90,
+        "struggle_tool_errors": 5,   # a success with >= this many tool errors counts as a
+                                     # failure for learning only (0 disables)
+        "struggle_turns": 30,        # same for >= this many turns (0 disables)
         "explore_down": True,        # chosen tier keeps succeeding on low-risk simple
                                      # tasks -> try one tier lower (ccr/history/learn.py)
     },
@@ -126,10 +134,18 @@ DEFAULTS: dict = {
     "hooks": {
         "enabled": True,             # master switch for every ccr hook
         "route_prompts": True,       # UserPromptSubmit: inject the routing line
+        "store_prompts": False,      # opt in: keep prompt text + decision process in
+                                     # .ccr/local/prompts.jsonl (local only) for the dashboard
         "show_in_ui": True,          # also show a short routing line to the USER (systemMessage)
         "model_advice": True,        # suggest `/model <x>` for iterative work above the main model
         "background_graph": True,    # SessionStart: refresh a stale graph in the background
         "watchdog_ms": 1500,         # hard internal deadline per hook run
+        "redact_prompts": True,      # strip keys, tokens, emails and credentials from stored prompts
+        "prompt_retention_days": 30, # drop stored prompts older than this (0 = keep forever)
+        "rework_minutes": 15,        # a dissatisfied reply about the same code within this long
+                                     # flags the previous task as possible rework
+        "success_gap_minutes": 120,  # idle longer than this before the next prompt: outcome
+                                     # unknown instead of success
     },
 }
 
@@ -235,11 +251,11 @@ def _merge_tiers(cfg: Config, raw: dict) -> None:
     tiers = raw.get("tiers")
     if tiers is not None:
         if not isinstance(tiers, dict):
-            cfg.errors.append("tiers: expected a mapping of T0..T4")
+            cfg.errors.append("tiers: expected a mapping of T0..T4 and T2H")
         else:
             for name, spec in tiers.items():
                 if name not in TIERS:
-                    cfg.errors.append(f"tiers.{name}: unknown tier (expected T0..T4)")
+                    cfg.errors.append(f"tiers.{name}: unknown tier (expected one of {', '.join(TIERS)})")
                     continue
                 if not isinstance(spec, dict):
                     cfg.errors.append(f"tiers.{name}: expected a mapping")
@@ -375,7 +391,8 @@ def _merge_history(cfg: Config, raw: dict) -> None:
             cfg.errors.append(f"history.explore_down: expected true or false, got {v!r}")
     _section(cfg, {"history": hist}, "history", {
         "min_samples": (1, 10_000), "fail_rate_up": (0, 1), "success_rate_down": (0, 1),
-        "window_days": (1, 3650)})
+        "window_days": (1, 3650), "struggle_tool_errors": (0, 10_000),
+        "struggle_turns": (0, 10_000)})
 
 
 def _merge_run(cfg: Config, raw: dict) -> None:
@@ -446,8 +463,11 @@ def _merge_hooks(cfg: Config, raw: dict) -> None:
     hooks = raw.get("hooks")
     if isinstance(hooks, dict):
         for k, v in hooks.items():
-            if k == "watchdog_ms":
-                if _num(cfg, "hooks.watchdog_ms", v, 100, 60_000):
+            if k in ("watchdog_ms", "success_gap_minutes", "rework_minutes",
+                     "prompt_retention_days"):
+                lo, hi = {"watchdog_ms": (100, 60_000), "prompt_retention_days": (0, 3650)}.get(
+                    k, (1, 10_080))
+                if _num(cfg, f"hooks.{k}", v, lo, hi):
                     d["hooks"][k] = int(v)
             elif k in DEFAULTS["hooks"]:
                 if isinstance(v, bool):

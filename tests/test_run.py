@@ -199,10 +199,12 @@ def test_run_stops_after_max_escalations(proj, shim):
 def test_more_escalations_climb_one_tier_at_a_time(proj, shim):
     set_plan, calls = shim
     set_plan({"sonnet/low": ["error_max_turns.json", 1],
-              "sonnet/medium": ["error_max_turns.json", 1], "opus/high": ["success.json", 0]})
+              "sonnet/medium": ["error_max_turns.json", 1],
+              "sonnet/high": ["error_max_turns.json", 1], "opus/high": ["success.json", 0]})
     r = cli.invoke(app, ["run", PAGINATE, "--max-escalations", "3", "--path", str(proj)])
     assert r.exit_code == 0
-    assert [x["key"] for x in calls()] == ["sonnet/low", "sonnet/medium", "opus/high"]
+    assert [x["key"] for x in calls()] == ["sonnet/low", "sonnet/medium", "sonnet/high",
+                                         "opus/high"]
     # T3 failure: T4 needs a critical-path rule, so the run stops there
     set_plan({"opus/high": ["error_max_turns.json", 1]})
     r = cli.invoke(app, ["run", PAGINATE, "--tier", "T3", "--max-escalations", "3",

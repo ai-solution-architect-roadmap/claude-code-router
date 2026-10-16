@@ -14,12 +14,13 @@ def test_defaults_when_missing(tmp_path):
     cfg = load_config(tmp_path)
     assert cfg.path is None and not cfg.errors and not cfg.warnings
     t = cfg.tiers
-    assert [(t[k].model, t[k].effort, t[k].agent) for k in ("T0", "T1", "T2", "T3", "T4")] == [
+    assert [(t[k].model, t[k].effort, t[k].agent) for k in ("T0", "T1", "T2", "T2H", "T3", "T4")] == [
         ("haiku", "low", "ccr-quick"), ("sonnet", "low", "ccr-small"),
-        ("sonnet", "medium", "ccr-implement"), ("opus", "high", "ccr-architect"),
+        ("sonnet", "medium", "ccr-implement"), ("sonnet", "high", "ccr-senior"),
+        ("opus", "high", "ccr-architect"),
         ("opus", "xhigh", "ccr-critical")]
     assert "fable" not in str(cfg["tiers"])
-    assert cfg.tier(4).name == "T4" and cfg.tier("T2").index == 2
+    assert cfg.tier(5).name == "T4" and cfg.tier("T2").index == 2
 
 
 def test_defaults_are_not_shared(tmp_path):
