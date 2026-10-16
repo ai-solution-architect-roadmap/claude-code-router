@@ -270,6 +270,198 @@ def stats(as_json: bool = typer.Option(False, "--json", help="Machine-readable o
 
 
 @app.command()
+def dashboard(days: Optional[float] = typer.Option(None, "--days", min=0.01,
+                                                   help="Only the last N days"),
+              out: Optional[Path] = typer.Option(None, "--out", help="Output file (default "
+                                                 ".ccr/local/dashboard.html)"),
+              open_: bool = typer.Option(False, "--open", help="Open it in the browser"),
+              path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Write a self-contained HTML dashboard: charts, savings, misroutes and recent tasks."""
+    from ccr import history as H
+    from ccr.config import load_config
+    from ccr.history import dashboard as dash
+    root = path.resolve()
+    cfg = load_config(root)
+    target = (out or root / ".ccr" / "local" / "dashboard.html").resolve()
+    dash.write(root, H.read(root, window_days=days), cfg, target)
+    typer.echo(f"wrote {target}")
+    if open_:
+        import webbrowser
+        webbrowser.open(target.as_uri())
+
+
+@app.command("export-benchmark")
+def export_benchmark(out: Path = typer.Option(Path("ccr-benchmark.json"), "--out",
+                                              help="Output JSON file"),
+                     path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Write a replay set from decided tasks with stored prompts (needs hooks.store_prompts).
+
+    Replay it with: uv run python scripts/bench_routing.py --prompts FILE"""
+    from ccr import history as H
+    from ccr.history import calibrate, prompts
+    root = path.resolve()
+    items = calibrate.export_benchmark(H.read(root), prompts.read(root))
+    if not items:
+        typer.echo("no decided tasks with a stored prompt yet: set hooks.store_prompts: true, "
+                   "use ccr, and mark outcomes with `ccr feedback good|bad`", err=True)
+        raise typer.Exit(1)
+    out.write_text(json.dumps(items, indent=1))
+    typer.echo(f"wrote {len(items)} labelled prompt(s) to {out} (contains your prompt text)")
+
+
+@app.command()
+def calibrate(as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+              path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Fit failure odds on routing signals and compare with the rules (report only)."""
+    from ccr import history as H
+    from ccr.history import calibrate as C
+    res = C.fit(H.read(path.resolve()))
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    for line in C.format_text(res):
+        typer.echo(line)
+
+
+@app.command()
+def shadow(from_tier: str = typer.Option("T3", "--from-tier",
+                                         help="Sample tasks routed to this tier or above"),
+           lower: Optional[str] = typer.Option(None, "--shadow-tier", help="Tier to try instead "
+                                               "(default: one below the task's tier)"),
+           sample: int = typer.Option(3, "--sample", min=1, max=50, help="How many tasks to re-run"),
+           max_budget_usd: Optional[float] = typer.Option(None, "--max-budget-usd", min=0.01,
+                                                          help="Total spend cap across the sample"),
+           test_command: Optional[str] = typer.Option(None, "--test-command", help="Must exit 0 "
+                                                      "for a shadow run to count as success"),
+           yes: bool = typer.Option(False, "--yes", help="Actually run (spends real usage)"),
+           path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Re-run sampled deep-tier tasks at a lower tier to measure over-routing (opt-in, costs usage).
+
+    Runs your own `claude -p` in a throwaway git worktree of HEAD. Prompts come from
+    `hooks.store_prompts`. Without --yes it only prints the plan."""
+    from ccr import history as H
+    from ccr.config import TIERS, load_config
+    from ccr.history import prompts, shadow as S
+    root = path.resolve()
+    if from_tier not in TIERS or (lower and lower not in TIERS):
+        typer.echo(f"error: tiers are {', '.join(TIERS)}", err=True)
+        raise typer.Exit(2)
+    cfg = load_config(root)
+    picks = S.pick(H.read(root), prompts.read(root), {e["id"] for e in S.read(root)},
+                   from_tier, sample)
+    if not picks:
+        typer.echo("nothing to sample: need successful tasks at or above "
+                   f"{from_tier} with stored prompts (hooks.store_prompts: true)", err=True)
+        raise typer.Exit(1)
+    if max_budget_usd is None:
+        typer.echo("error: --max-budget-usd is required (total cap across the sample)", err=True)
+        raise typer.Exit(2)
+    per = round(max_budget_usd / len(picks), 4)
+    tests = (f"tests: {test_command}" if test_command else
+             "NO test command: success will only mean claude exited cleanly")
+    typer.echo(f"plan: re-run {len(picks)} task(s) at {lower or 'one tier below'}, up to ${per} "
+               f"each (worst case ${max_budget_usd}); {tests}")
+    typer.echo("note: this uses your own claude login. On a subscription it draws on your plan "
+               "limits; with an API key it is billed in dollars.")
+    if not yes:
+        typer.echo("dry run: add --yes to execute")
+        raise typer.Exit(0)
+    logged = prompts.read(root)
+    for rec in picks:
+        entry = S.run_one(root, rec, logged[rec["id"]]["prompt"],
+                          S.shadow_tier(rec["tier"], lower), cfg, budget=per,
+                          test_command=test_command)
+        S.append(root, entry)
+        typer.echo(f"  {rec['id'][:8]} {entry['deep_tier']}->{entry['shadow_tier']}: "
+                   f"{entry['outcome']} ({entry['reason']})")
+    for line in S.format_lines(S.summarize(S.read(root))):
+        typer.echo(line)
+
+
+@app.command()
+def tune(apply: bool = typer.Option(False, "--apply", help="Write the changes (backs up the config)"),
+         path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Propose config edits from misroute evidence as a diff. Never changes anything without --apply."""
+    import shutil
+    import time
+    from ccr import history as H
+    from ccr.config import config_path, load_config
+    from ccr.history import tune as TU
+    root = path.resolve()
+    cfg = load_config(root)
+    changes = TU.propose(H.read(root), cfg)
+    if not changes:
+        typer.echo("no changes proposed (not enough decided misroutes yet)")
+        return
+    cp = config_path(root)
+    old = cp.read_text(encoding="utf-8") if cp.exists() else "version: 1\n"
+    new = TU.apply_text(old, changes)
+    for ch in changes:
+        typer.echo(f"- {ch['why']}")
+    for line in TU.diff(old, new):
+        typer.echo(line)
+    if not apply:
+        typer.echo("\nnot applied: run `ccr tune --apply` to write this")
+        return
+    tmp = cp.with_suffix(".tune.tmp")
+    tmp.write_text(new, encoding="utf-8")
+    check = load_config(path=tmp)
+    if check.errors:
+        tmp.unlink(missing_ok=True)
+        typer.echo("error: the edited config would be invalid: " + "; ".join(check.errors), err=True)
+        raise typer.Exit(2)
+    if cp.exists():
+        bk = root / ".ccr" / "backups"
+        bk.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cp, bk / f"config.yaml.{int(time.time())}")
+    tmp.replace(cp)
+    typer.echo(f"applied to {cp} (backup in .ccr/backups/)")
+
+
+@app.command()
+def purge(prompts_: bool = typer.Option(False, "--prompts", help="Stored prompts and decisions"),
+          shadow_: bool = typer.Option(False, "--shadow", help="Shadow-run results"),
+          older_than: Optional[int] = typer.Option(None, "--older-than", min=1,
+                                                   help="Only entries older than N days (prompts)"),
+          redact_: bool = typer.Option(False, "--redact", help="Re-scrub existing stored prompts"),
+          yes: bool = typer.Option(False, "--yes", help="Actually delete (default: show only)"),
+          path: Path = typer.Option(Path("."), "--path", help="Project root")) -> None:
+    """Delete or scrub locally stored prompts and shadow results. Shows what it would do first."""
+    import json
+    from ccr.history import prompts as P, shadow as S
+    root = path.resolve()
+    if not (prompts_ or shadow_ or redact_):
+        typer.echo("choose what to purge: --prompts, --shadow, or --redact", err=True)
+        raise typer.Exit(2)
+    pp, sp = P.path(root), S.path(root)
+    entries = P.read(root)
+    typer.echo(f"prompts:  {len(entries)} stored ({pp.stat().st_size if pp.exists() else 0} bytes)")
+    typer.echo(f"shadow:   {len(S.read(root))} result(s)")
+    if not yes:
+        typer.echo("dry run: add --yes to apply")
+        return
+    if prompts_:
+        if older_than:
+            typer.echo(f"removed {P.prune(root, older_than)} prompt(s) older than {older_than} days")
+        else:
+            pp.unlink(missing_ok=True)
+            typer.echo("removed all stored prompts")
+    if shadow_:
+        sp.unlink(missing_ok=True)
+        typer.echo("removed shadow results")
+    if redact_ and pp.exists():
+        n = 0
+        out = []
+        for e in P.read(root).values():
+            text, kinds = P.redact_text(str(e.get("prompt") or ""))
+            n += bool(kinds)
+            out.append(json.dumps({**e, "prompt": text, "redacted": sorted(
+                set(e.get("redacted") or []) | set(kinds))}, separators=(",", ":"), default=str))
+        pp.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+        typer.echo(f"re-scrubbed {n} prompt(s) that held secrets")
+
+
+@app.command()
 def feedback(verdict: Optional[str] = typer.Argument(None, help="good | bad (omit to show "
                                                      "the last task)"),
              last: bool = typer.Option(True, "--last", help="Target the most recent routed "
