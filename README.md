@@ -103,11 +103,28 @@ in Claude Code, so put it at the end: `rewrite the README intro !noroute`.
 | T0   | haiku / low     | `ccr-quick`     | questions, lookups, typos, renames, formatting |
 | T1   | sonnet / low    | `ccr-small`     | tests, clear bug fixes, small scoped edits |
 | T2   | sonnet / medium | `ccr-implement` | features, refactors, perf work, risky bug fixes |
-| T3   | opus / high     | `ccr-architect` | migrations, security, unclear or intermittent bugs, design |
+| T2H  | sonnet / high   | `ccr-senior`    | a single push-up from T2: risky or complex multi-file changes |
+| T3   | opus / high     | `ccr-architect` | migrations, security, unclear or intermittent bugs, design and plans |
 | T4   | opus / xhigh    | `ccr-critical`  | only by a critical-path rule (see below) |
 
 `Explore` is overridden to run on haiku for search. These are the defaults; change them in
 `tiers:` (see the configuration reference).
+
+Routing also handles a few cases that need more than cue words:
+
+- **Design class.** Requests for a plan, strategy or architecture ("design a plan for
+  multi-currency support", "how would you structure ...") start at T3 (`class_base.design`).
+- **Bug reports that name no code.** A short bug report ccr cannot tie to any file ("it
+  crashes", "the weekly report is wrong") is routed as `debugging` (T3) because the work is
+  finding the problem. A retry phrase such as "still failing" is not treated this way.
+- **Destroying production data.** "delete all ... from the production database", "truncate
+  the audit table in prod" and "wipe the users table on prod" go to T4 whatever class they
+  were given. A question about the same thing does not.
+- **Sweeping rewrites.** "rewrite everything in rust", "make it multi region" and similar get
+  two tiers up (capped at T3 unless a critical-path rule applies).
+- **Follow-ups.** A short reply that leans on the conversation ("do the same for refunds",
+  "make it stricter") inherits the previous task's files for locating, and its class and tier
+  when the reply says little about the kind of work. The routing line says so.
 
 How a tier is picked (every number is in the config):
 
@@ -117,7 +134,8 @@ How a tier is picked (every number is in the config):
    intermittent failures: "sometimes", "flaky", "randomly"), complex code (for bugs, perf and
    debugging: high complexity plus many dependents or weak tests), high risk, a critical
    path, or a memory flag (critical, protected, fragile). **+2** when three or more of these
-   agree. The push-up is capped by `routing.max_escalation` (2).
+   agree. The push-up is capped by `routing.max_escalation` (2). T2H is a half step: a
+   single +1 from T2 lands on it, a +2 or a critical path jumps over it to T3.
 3. **-1** for a small scope or explicit step-by-step instructions, but never on a critical
    path, and never below T1 for code changes.
 Prompt length is not a signal. The code the task touches is.
@@ -149,6 +167,7 @@ tiers:                       # effort: low|medium|high|xhigh (effortLevel does n
   T0: {model: haiku,  effort: low,    agent: ccr-quick}
   T1: {model: sonnet, effort: low,    agent: ccr-small}
   T2: {model: sonnet, effort: medium, agent: ccr-implement}
+  T2H: {model: sonnet, effort: high,  agent: ccr-senior}
   T3: {model: opus,   effort: high,   agent: ccr-architect}
   T4: {model: opus,   effort: xhigh,  agent: ccr-critical}   # models: haiku|sonnet|opus|claude-* ids
                                                              # (fable only on T4). Rerun `ccr init`
@@ -202,6 +221,8 @@ history:                     # learning loop (ccr/history/learn.py)
   fail_rate_up: 0.5          # failure rate at the starting tier that moves it up
   success_rate_down: 0.8     # success rate that moves it down / explores one lower
   window_days: 90
+  struggle_tool_errors: 5    # a success with >= this many tool errors counts as a failure
+  struggle_turns: 30         #   ... or >= this many turns (0 disables each); learning only
   explore_down: true         # try one lower on low-risk simple tasks that keep succeeding
 
 llm:                         # opt-in assist (`ccr explain --llm`, `ccr run`)
@@ -230,6 +251,7 @@ hooks:
   model_advice: true         # suggest /model for iterative work above the main model
   background_graph: true     # refresh a stale graph after SessionStart
   watchdog_ms: 1500          # hard deadline per hook run
+  success_gap_minutes: 120   # idle longer than this before the next prompt: outcome unknown
 ```
 
 `ccr init` also writes the main-session defaults `model` and `effortLevel` into
@@ -410,6 +432,47 @@ Misroutes: over-routed 2/40 (5%, a cheaper tier had a proven record), under-rout
   only suggest: ccr never edits its own rules. A `tune: cue 'x' failed 3/4 at T1` line
   means a cue word's tasks keep failing at the tier it routes to: the rule has drifted.
 
+`ccr dashboard [--days N] [--out FILE] [--open]` writes one self-contained HTML file
+(default `.ccr/local/dashboard.html`, no server or network): KPI tiles, tasks per day by tier,
+success rate by tier, estimated cost against all-Opus and all-Sonnet, tokens by area, a class
+x tier heatmap, misroutes with `tune:` hints, learning adjustments and a
+decisions list (paginated, searchable, expandable), with a light/dark toggle. By default it shows
+the same data as `ccr stats` and no prompt text. Set `hooks.store_prompts: true` and new tasks also
+keep their prompt and the full decision steps (class, files, risk, learning, budget) in
+`.ccr/local/prompts.jsonl`. That file stays on your machine (gitignored, never in the shared
+`history.jsonl`) and holds your prompt text, so leave the setting off if you don't want that.
+
+**Signals beyond "still failing".** Two more signs that a cheap answer fell short are recorded
+on the previous task: `manual_model_up` (you moved the main session to a stronger model, and the
+next prompt is about the same code or leans on the last answer) and `possible_rework` (a
+dissatisfied reply such as "not quite" or "I meant" about the same code within
+`hooks.rework_minutes`). `manual_model_up` counts as a struggle for learning; `possible_rework`
+only counts once it repeats for the same class, area and tier. `ccr stats` shows both counts.
+
+`ccr shadow --max-budget-usd N [--from-tier T3] [--shadow-tier T1] [--sample 3] [--test-command CMD] --yes`
+measures over-routing directly: it re-runs a few sampled deep-tier tasks (prompts from
+`hooks.store_prompts`) at a lower tier with your own `claude -p`, in a throwaway `git worktree`
+of HEAD, and records whether they succeeded in `.ccr/local/shadow.jsonl`. It spends real usage,
+so it prints the plan and runs nothing without `--yes` and a budget cap. Without
+`--test-command`, "success" only means claude exited cleanly. Results appear in `ccr stats` and
+the dashboard.
+
+`ccr tune [--apply]` turns misroute evidence (drifting cue words, classes that keep failing or
+keep being over-routed) into a diff of `.ccr/config.yaml` (`hard_terms`, `class_base`). It
+changes nothing unless you pass `--apply`, which backs the file up and refuses an invalid result.
+
+`ccr export-benchmark [--out FILE]` turns decided tasks that have a stored prompt
+(`hooks.store_prompts`) into your own replay set for `bench_routing.py --prompts`. A failure at a
+tier labels the prompt "needs the next tier up"; a success labels the lowest tier proven for that
+class and area. Successes prove a tier was enough, not that it was necessary, so this catches
+under-routing well and over-routing only where a cheaper tier has its own record.
+
+`ccr calibrate` fits a small logistic regression (stdlib only) of failure odds on the routing
+signals in each record's trace and the tier it got. It reports cross-validated AUC, a verdict, the
+strongest signals and a shadow comparison (the tier the model would have picked). It needs 30
+decided tasks with at least 5 successes and 5 failures, and says "no better than guessing" when the
+signals don't predict failures. It never changes routing: use it to decide which rules to tune.
+
 `uv run python scripts/bench_routing.py` replays a labelled prompt set (terse but huge,
 long but trivial, "fix login sometimes failing", ...) and reports under- and over-routed
 prompts and the estimated cost against the baselines, without API calls. Edit `PROMPTS`, or pass
@@ -423,6 +486,13 @@ How the columns are computed:
 - **Tokens** count input + output + cache-creation tokens.
 - **Cost** is what `claude -p` reports (an estimate). Interactive subscription sessions
   have no per-task price, so they show tokens only.
+
+**How an interactive outcome is judged** (when the next prompt arrives): a retry phrase
+("still failing") is a failure; a revert phrase ("undo that", "start over") is `abandoned` and
+not counted; going idle for longer than `hooks.success_gap_minutes` leaves it unknown; anything
+else is a success. A success that struggled (at least `history.struggle_tool_errors` tool errors,
+`history.struggle_turns` turns, or the model said it could not finish) is counted as a failure by
+the learning rules only. `ccr stats` still shows the real outcome and how many struggled.
 
 **Learning rules** (per task class x area; class-wide when that area has no samples yet):
 

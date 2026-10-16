@@ -49,6 +49,51 @@ def _doctor_settings(root: Path) -> list[tuple[str, str]]:
     return out
 
 
+def _doctor_privacy(root: Path) -> list[tuple[str, str]]:
+    from ccr.config import load_config
+    from ccr.history import prompts
+    cfg = load_config(root)
+    h = cfg["hooks"]
+    pp = prompts.path(root)
+    out: list[tuple[str, str]] = []
+    if h["store_prompts"]:
+        n = len(prompts.read(root))
+        keep = (f"kept {h['prompt_retention_days']} day(s)" if h["prompt_retention_days"]
+                else "kept forever")
+        out.append(("INFO", f"prompt logging is ON ({n} stored, {keep}, "
+                            f"redaction {'on' if h['redact_prompts'] else 'OFF'}); "
+                            f"`ccr purge --prompts --yes` deletes them"))
+        if not h["redact_prompts"]:
+            out.append(("WARN", "hooks.redact_prompts is off: pasted secrets would be stored"))
+    elif pp.exists():
+        out.append(("INFO", "prompt logging is off but .ccr/local/prompts.jsonl still exists "
+                            "(`ccr purge --prompts --yes`)"))
+    if pp.exists() and (root / ".git").exists():
+        try:
+            ignored = subprocess.run(["git", "check-ignore", "-q", str(pp.relative_to(root))],
+                                     cwd=root, capture_output=True).returncode == 0
+        except OSError:
+            ignored = True
+        if not ignored:
+            out.append(("FAIL", ".ccr/local/prompts.jsonl is not gitignored: it holds prompt text "
+                                "(add `.ccr/local/` to .gitignore, or rerun `ccr init`)"))
+    return out
+
+
+def _doctor_agents(root: Path) -> list[tuple[str, str]]:
+    from ccr.config import load_config
+    cfg = load_config(root)
+    adir = root / ".claude" / "agents"
+    if not adir.is_dir():
+        return [("INFO", ".claude/agents not present (run `ccr init`)")]
+    missing = [f"{t.agent} ({n})" for n, t in cfg.tiers.items()
+               if not (adir / f"{t.agent}.md").exists()]
+    if missing:
+        return [("WARN", "tier agent file(s) missing: " + ", ".join(missing)
+                         + " (rerun `ccr init` to create them)")]
+    return [("OK", f"all {len(cfg.tiers)} tier agents present in .claude/agents")]
+
+
 def _doctor_history(root: Path) -> list[tuple[str, str]]:
     from ccr import history as H
     p = H.history_path(root)
@@ -152,7 +197,7 @@ def _doctor_memory(root: Path) -> list[tuple[str, str]]:
 
 # Checks run in this order; add a check by appending a `(root) -> [(level, message)]` function.
 CHECKS = (_doctor_claude, _doctor_effort_env, _doctor_settings, _doctor_config, _doctor_graph,
-          _doctor_memory, _doctor_history)
+          _doctor_memory, _doctor_agents, _doctor_privacy, _doctor_history)
 
 
 def run_doctor(root: Path) -> list[tuple[str, str]]:

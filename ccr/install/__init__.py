@@ -127,7 +127,13 @@ def config_template(cfg) -> str:
               f"  show_in_ui: {str(h['show_in_ui']).lower()}      # show the decision to you in "
               f"the UI (systemMessage), not only to Claude\n"
               f"  model_advice: {str(h['model_advice']).lower()}     # suggest /model for "
-              f"iterative work above the main model", "",
+              f"iterative work above the main model",
+              "  store_prompts: false   # opt in: keep prompt text + decision steps in "
+              ".ccr/local/prompts.jsonl (local only)",
+              "  redact_prompts: true   # strip keys, tokens, emails and credentials from stored "
+              "prompts",
+              "  prompt_retention_days: 30   # drop stored prompts older than this (0 = forever)",
+              "  # rework_minutes: 15  success_gap_minutes: 120   (see the README)", "",
               "# Headless `ccr run`: success also requires this command to pass.",
               "run:",
               "  test_command: null      # e.g. \"pytest -q\" or \"npm test --silent\"",
