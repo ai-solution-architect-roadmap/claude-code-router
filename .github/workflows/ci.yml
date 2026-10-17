@@ -19,6 +19,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install
         run: uv sync --python ${{ matrix.python-version }}
+      - name: Download tree-sitter grammars
+        run: >
+          uv run python -c "import tree_sitter_language_pack as t;
+          t.download(['python','typescript','tsx','javascript','go','java','rust','zig'])"
       - name: Lint
         run: uv run ruff check .
       - name: Test

@@ -49,8 +49,9 @@ def test_shadow_picks_only_deep_successes_with_prompts():
     assert shadow.shadow_tier("T3", None) == "T2H"
 
 
-def test_shadow_summary_and_run_with_fake_runner(tmp_path):
+def test_shadow_summary_and_run_with_fake_runner(tmp_path, monkeypatch):
     from ccr.headless import Proc
+    monkeypatch.setattr("ccr.headless.find_claude", lambda env: "claude")
 
     def runner(argv, stdin, cwd, env, timeout):
         out = {"is_error": False, "subtype": "success", "result": "done", "num_turns": 1,
