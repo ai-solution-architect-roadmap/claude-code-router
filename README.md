@@ -16,6 +16,17 @@ ccr: T2 (sonnet/medium) — touches app/payments/ledger.py, 2 dependents, no tes
 critical path: payments. Delegate implementation to ccr-implement; use Explore (haiku) for search.
 ```
 
+## Screenshots
+
+`ccr explain` shows the tier and exactly why, without running anything:
+
+![ccr explain output](docs/images/explain.png)
+
+`ccr dashboard` writes a self-contained HTML report of tiers, success rate, estimated savings and
+every routing decision:
+
+![ccr dashboard](docs/images/dashboard.png)
+
 ## How it works
 
 For every prompt, a hook decides a tier using local, rule-based checks (no tokens spent, under
