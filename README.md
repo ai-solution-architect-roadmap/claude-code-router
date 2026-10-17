@@ -224,3 +224,7 @@ uv sync
 uv run pytest
 uv run python scripts/bench_routing.py
 ```
+
+## License
+
+[MIT](LICENSE)
