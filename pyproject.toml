@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-router"
-version = "0.1.0"
+version = "0.1.1"
 description = "Route Claude Code tasks to the cheapest sufficient model and effort"
 requires-python = ">=3.10"
 license = "MIT"

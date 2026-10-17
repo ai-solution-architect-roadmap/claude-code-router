@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.1] - 2026-10-17
+
+### Added
+- Published on PyPI as `claude-code-router` (the command is still `ccr`).
+- CI, contributing guide, issue and PR templates, README screenshots and badges.
+
 ## [0.1.0] - 2026-10-17
 
 ### Added
