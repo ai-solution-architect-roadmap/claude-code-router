@@ -54,16 +54,140 @@ Re-running `ccr init` is safe. To skip routing for one prompt, put `!noroute` at
 
 ## Commands
 
-| Command | What it does |
-|---------|--------------|
-| `ccr init` | Install settings, hooks, agents and config into the project |
-| `ccr explain "<task>"` | Show which tier a task gets and why; runs nothing |
-| `ccr run "<task>"` | Headless run at the routed tier; climbs a tier if the attempt fails |
-| `ccr doctor` | Validate the setup and config |
-| `ccr stats` | Success and escalation rates by tier, and estimated savings |
-| `ccr feedback good\|bad` | Record the outcome of the last task |
-| `ccr calibrate` | Check how well the routing signals predict failures |
-| `ccr shadow` | Compare against a cheaper tier on sampled tasks (spends real usage) |
+Every command accepts `--path DIR` (project root, default `.`) and `--help`. Run `ccr --help`
+for the list.
+
+### Setup
+
+**`ccr init`** installs settings (model, hooks, status line), the `ccr-*` agents and
+`.ccr/config.yaml`. Safe to re-run; modified files are backed up to `.ccr/backups/`.
+
+| Option | Effect |
+|--------|--------|
+| `--dry-run` | Print the exact diff; write nothing |
+| `--force` | Override your `model`/`effortLevel` and regenerate edited ccr agent files (with backups) |
+| `--local` | Write settings to `.claude/settings.local.json` (personal, uncommitted) |
+| `--no-statusline` | Do not install the status line relay |
+| `--no-graph` | Skip building the code graph |
+| `--command CMD` | Command prefix the hooks use to run ccr (default: auto-detect) |
+
+```sh
+ccr init --dry-run
+ccr init --local --no-statusline
+```
+
+**`ccr profile [PATH]`** prints the detected languages, frameworks, file count and LOC, and the
+suggested session default model/effort.
+
+| Option | Effect |
+|--------|--------|
+| `--apply` | Write the suggestion into `.claude/settings.json` (overrides existing values) |
+| `--dry-run` | With `--apply`: print the diff only |
+| `--local` | With `--apply`: write `.claude/settings.local.json` instead |
+
+**`ccr doctor`** checks the environment and project setup. `--verbose` logs details to
+`.ccr/local/ccr.log`.
+
+**`ccr graph`** builds or refreshes the code graph incrementally, or inspects it.
+
+| Option | Effect |
+|--------|--------|
+| `--rebuild` | Drop and rebuild the graph |
+| `--stats` | Show graph statistics |
+| `--query SYMBOL` | Look up a symbol |
+| `--offline` | Never download tree-sitter grammars |
+
+### Routing
+
+**`ccr explain "<task>"`** shows the tier, scores, touched files and reasoning. Runs nothing.
+`--json` gives machine-readable output; `--llm` asks haiku (your `claude` CLI) when rule
+confidence is low.
+
+```sh
+ccr explain "Fix the off-by-one in paginate() in app/api/pagination.py"
+```
+
+**`ccr run "<task>"`** runs the task headlessly with `claude -p` at the routed tier and climbs
+one tier if the attempt fails. Omit the task or pass `-` to read it from stdin.
+
+| Option | Effect |
+|--------|--------|
+| `--tier T0..T4` | Start at this tier instead of the routed one |
+| `--max-turns N` | Turn cap per attempt (default `run.max_turns`) |
+| `--max-budget-usd X` | Spend cap for the whole run, all attempts |
+| `--max-escalations N` | Tiers to climb after a failure, 0 to 4 (default 1) |
+| `--test-command CMD` | Shell command that must exit 0 for success (default `run.test_command`) |
+| `--no-test` | Skip the test command |
+| `--permission-mode MODE` | Passed to claude, e.g. `acceptEdits` |
+| `--no-llm` | Rules only; never ask haiku to help classify |
+| `--dry-run` | Show the routing and the command; run nothing |
+| `--json` | Print a JSON summary instead of the result text |
+
+```sh
+ccr run "add a --dry-run flag to app/main.py" --test-command "pytest -q" --max-budget-usd 2
+```
+
+### Feedback, stats and learning
+
+**`ccr feedback [good|bad]`** marks the last routed task good or bad (a correction record is
+appended; history is never rewritten). With no verdict it shows the last task. Use `--id PREFIX`
+to target a task by id instead of the most recent one.
+
+**`ccr stats`** shows usage, estimated savings, misroutes, tier distribution, and success and
+escalation rates per tier, area and task class.
+
+| Option | Effect |
+|--------|--------|
+| `--days N` | Only the last N days |
+| `--misroutes` | List each over- and under-routed task |
+| `--json` | Machine-readable output |
+
+**`ccr dashboard`** writes a self-contained HTML dashboard (charts, savings, misroutes, recent
+tasks). Options: `--days N`, `--out FILE` (default `.ccr/local/dashboard.html`), `--open` to open
+it in the browser.
+
+**`ccr calibrate`** fits failure odds on the routing signals and compares them with the rules.
+Report only; it never changes routing. Needs about 30 decided tasks. `--json` for machine output.
+
+**`ccr tune`** proposes config edits from misroute evidence as a diff. Nothing changes unless
+you pass `--apply`, which backs up the config first.
+
+**`ccr shadow`** re-runs sampled deep-tier tasks at a lower tier in a throwaway git worktree to
+measure over-routing. Opt-in and costs real usage; without `--yes` it only prints the plan.
+Needs `hooks.store_prompts`.
+
+| Option | Effect |
+|--------|--------|
+| `--from-tier T` | Sample tasks routed to this tier or above (default `T3`) |
+| `--shadow-tier T` | Tier to try instead (default: one below the task's tier) |
+| `--sample N` | How many tasks to re-run, 1 to 50 (default 3) |
+| `--max-budget-usd X` | Total spend cap across the sample |
+| `--test-command CMD` | Must exit 0 for a shadow run to count as success |
+| `--yes` | Actually run |
+
+**`ccr export-benchmark`** writes a replay set from decided tasks with stored prompts to
+`--out FILE` (default `ccr-benchmark.json`). Replay it with
+`uv run python scripts/bench_routing.py --prompts FILE`.
+
+### Privacy
+
+**`ccr purge`** deletes or scrubs locally stored prompts and shadow results. It shows what it
+would do first and deletes only with `--yes`.
+
+| Option | Effect |
+|--------|--------|
+| `--prompts` | Stored prompts and decisions |
+| `--shadow` | Shadow-run results |
+| `--older-than N` | Only prompts older than N days |
+| `--redact` | Re-scrub existing stored prompts |
+| `--yes` | Actually delete |
+
+### Internal (called by Claude Code, not by you)
+
+- **`ccr hook session-start|prompt|stop`** is the hook entry. It reads hook JSON on stdin and
+  always exits 0.
+- **`ccr statusline`** is the status line relay. It records model, effort and rate limits, and
+  prints a short line. `--wrap "<cmd>"` runs your own status line command and prints its output.
 
 ## Configuration
 
