@@ -1,5 +1,6 @@
 # ccr: the cheapest sufficient model for Claude Code
 
+[![CI](https://github.com/ai-solution-architect-roadmap/claude-code-router/actions/workflows/ci.yml/badge.svg)](https://github.com/ai-solution-architect-roadmap/claude-code-router/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-d97757.svg)](https://claude.com/claude-code)
@@ -41,9 +42,17 @@ half a second):
 Requires Python 3.10+, git, and Claude Code (`claude`) on PATH.
 
 ```sh
-uv tool install git+<repo-url>      # or: pipx install git+<repo-url>
+uv tool install git+https://github.com/ai-solution-architect-roadmap/claude-code-router.git
+# or
+pipx install git+https://github.com/ai-solution-architect-roadmap/claude-code-router.git
 ccr --help
 ```
+
+> Name clash: the npm package *claude-code-router* also installs a `ccr` command. Install
+> this tool so `ccr` on your PATH is this one. `ccr doctor` checks.
+
+The `.claude/` folder in this repo is a working example of what `ccr init` generates (agents and
+settings), because ccr routes its own development.
 
 ## Quick start
 
@@ -224,6 +233,8 @@ budget pressure, hooks and fail-open behavior, headless runs, feedback and learn
 limitations and troubleshooting.
 
 ## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [changelog](CHANGELOG.md).
 
 ```sh
 uv sync
