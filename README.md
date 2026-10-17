@@ -1,5 +1,11 @@
 # ccr: the cheapest sufficient model for Claude Code
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-d97757.svg)](https://claude.com/claude-code)
+[![Rule-based](https://img.shields.io/badge/routing-rule--based%20%26%20local-success.svg)](#how-it-works)
+[![Last commit](https://img.shields.io/github/last-commit/ai-solution-architect-roadmap/claude-code-router)](https://github.com/ai-solution-architect-roadmap/claude-code-router/commits/main)
+
 `ccr` routes each Claude Code task to the cheapest model and effort level that should be
 enough for it, so your subscription goes further without you picking models by hand. You keep
 typing plain `claude`.
