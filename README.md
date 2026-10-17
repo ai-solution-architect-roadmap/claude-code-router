@@ -1,8 +1,8 @@
 # ccr: the cheapest sufficient model for Claude Code
 
 [![CI](https://github.com/ai-solution-architect-roadmap/claude-code-router/actions/workflows/ci.yml/badge.svg)](https://github.com/ai-solution-architect-roadmap/claude-code-router/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/ai-solution-architect-roadmap/claude-code-router/blob/main/LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://github.com/ai-solution-architect-roadmap/claude-code-router/blob/main/pyproject.toml)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-d97757.svg)](https://claude.com/claude-code)
 [![Rule-based](https://img.shields.io/badge/routing-rule--based%20%26%20local-success.svg)](#how-it-works)
 [![Last commit](https://img.shields.io/github/last-commit/ai-solution-architect-roadmap/claude-code-router)](https://github.com/ai-solution-architect-roadmap/claude-code-router/commits/main)
@@ -20,12 +20,12 @@ critical path: payments. Delegate implementation to ccr-implement; use Explore (
 
 `ccr explain` shows the tier and exactly why, without running anything:
 
-![ccr explain output](docs/images/explain.png)
+![ccr explain output](https://raw.githubusercontent.com/ai-solution-architect-roadmap/claude-code-router/main/docs/images/explain.png)
 
 `ccr dashboard` writes a self-contained HTML report of tiers, success rate, estimated savings and
 every routing decision:
 
-![ccr dashboard](docs/images/dashboard.png)
+![ccr dashboard](https://raw.githubusercontent.com/ai-solution-architect-roadmap/claude-code-router/main/docs/images/dashboard.png)
 
 ## How it works
 
@@ -53,11 +53,17 @@ half a second):
 Requires Python 3.10+, git, and Claude Code (`claude`) on PATH.
 
 ```sh
-uv tool install git+https://github.com/ai-solution-architect-roadmap/claude-code-router.git
+uv tool install claude-code-router
 # or
-pipx install git+https://github.com/ai-solution-architect-roadmap/claude-code-router.git
+pipx install claude-code-router
+# or
+pip install claude-code-router
+
 ccr --help
 ```
+
+The package is `claude-code-router`; the command it installs is `ccr`. To install the latest
+unreleased code instead, use `uv tool install git+https://github.com/ai-solution-architect-roadmap/claude-code-router.git`.
 
 > Name clash: the npm package *claude-code-router* also installs a `ccr` command. Install
 > this tool so `ccr` on your PATH is this one. `ccr doctor` checks.
@@ -219,7 +225,7 @@ would do first and deletes only with `--yes`.
 
 `ccr init` creates `.ccr/config.yaml`; commit it. Any key you leave out uses the default. You
 can change the tiers, class base tiers, critical paths and terms, risk weights, budget limits
-and learning thresholds. See the [full reference](docs/REFERENCE.md).
+and learning thresholds. See the [full reference](https://github.com/ai-solution-architect-roadmap/claude-code-router/blob/main/docs/REFERENCE.md).
 
 ## Accuracy
 
@@ -239,13 +245,13 @@ opt-in classification by haiku through your own `claude` CLI. Local state lives 
 
 ## Documentation
 
-The [reference](docs/REFERENCE.md) covers the full configuration, team workflow, status line and
+The [reference](https://github.com/ai-solution-architect-roadmap/claude-code-router/blob/main/docs/REFERENCE.md) covers the full configuration, team workflow, status line and
 budget pressure, hooks and fail-open behavior, headless runs, feedback and learning, privacy,
 limitations and troubleshooting.
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and the [changelog](CHANGELOG.md).
+See [CONTRIBUTING.md](https://github.com/ai-solution-architect-roadmap/claude-code-router/blob/main/CONTRIBUTING.md) and the [changelog](https://github.com/ai-solution-architect-roadmap/claude-code-router/blob/main/CHANGELOG.md).
 
 ```sh
 uv sync
@@ -255,4 +261,4 @@ uv run python scripts/bench_routing.py
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/ai-solution-architect-roadmap/claude-code-router/blob/main/LICENSE)
