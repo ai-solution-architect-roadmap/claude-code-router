@@ -5,6 +5,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://github.com/ai-solution-architect-roadmap/claude-code-router/blob/main/pyproject.toml)
 [![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-d97757.svg)](https://claude.com/claude-code)
 [![Rule-based](https://img.shields.io/badge/routing-rule--based%20%26%20local-success.svg)](#how-it-works)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/claude-code-router?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/claude-code-router)
 [![Last commit](https://img.shields.io/github/last-commit/ai-solution-architect-roadmap/claude-code-router)](https://github.com/ai-solution-architect-roadmap/claude-code-router/commits/main)
 
 `ccr` routes each Claude Code task to the cheapest model and effort level that should be
