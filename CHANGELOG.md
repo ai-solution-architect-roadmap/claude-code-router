@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-## [0.2.1] - unreleased
+## [0.2.1] - 2026-11-24
 
 ### Changed
 - Code-first routing and the Haiku change prediction are always on; `code_first.enabled` and
@@ -19,8 +19,14 @@ All notable changes to this project are documented here.
 - The prompt hook keeps the prediction inside Claude Code's installed hook timeout, and
   `ccr doctor` warns when that timeout is under 15 s (re-run `ccr init`).
 - `CCR_NO_PREDICT=1` keeps test suites from calling the real CLI.
+- Releases are automatic: a push to main that changes the version tags it, creates the GitHub
+  release from this changelog, and publishes to PyPI and then npm. Steps already done are skipped.
 
-## [0.2.0] - unreleased
+### Fixed
+- The npm package name in the repo and README is now `@satya-prakash/claude-code-router`, the
+  name 0.2.0 was published under.
+
+## [0.2.0] - 2026-11-24
 
 ### Added
 - Code-first routing behind `code_first.enabled` (off by default): uncommitted edits and
@@ -28,7 +34,7 @@ All notable changes to this project are documented here.
   by one tier. Trivial edits, questions, steps and small-scope wording keep their keyword tier.
 - Haiku change prediction behind `predict.enabled` (off by default): when routing is unsure,
   Haiku predicts the files, size and contract changes, and the tier moves by one at most. See `docs/CODE_FIRST_ROUTING.md`.
-- npm launcher package `claude-code-tier-router` (in `npm/`): installs `ccr` with npm and
+- npm launcher package `@satya-prakash/claude-code-router` (in `npm/`): installs `ccr` with npm and
   runs the matching PyPI release from a private Python environment.
 - Release workflow publishes to npm after PyPI and checks that the tag matches both versions.
 

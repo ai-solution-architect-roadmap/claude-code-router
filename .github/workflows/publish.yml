@@ -1,23 +1,91 @@
-name: Publish to PyPI and npm
+name: Release
+
+# A push to main that changes the version releases it: tag vX.Y.Z, create the GitHub release from
+# CHANGELOG.md, publish to PyPI, then npm. Every step is skipped when it is already done, so a
+# push that does not change the version does nothing, and a failed run can simply be re-run.
+# A release created by hand still publishes (the release event), and the GitHub release created
+# here does not trigger a second run because GITHUB_TOKEN events never start workflows.
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      need_release: ${{ steps.v.outputs.need_release }}
+      need_pypi: ${{ steps.v.outputs.need_pypi }}
+      need_npm: ${{ steps.v.outputs.need_npm }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          py=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          name=$(node -p "require('./npm/package.json').name")
+          npmv=$(node -p "require('./npm/package.json').version")
+          echo "pyproject=$py npm=$name@$npmv"
+          if [ "$py" != "$npmv" ]; then echo "::error::pyproject ($py) and npm/package.json ($npmv) disagree"; exit 1; fi
+          if [ "$EVENT" = "release" ] && [ "$TAG" != "v$py" ]; then
+            echo "::error::release tag $TAG does not match version v$py"; exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$py" >/dev/null; then need_release=false; else need_release=true; fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/claude-code-router/$py/json")
+          if [ "$code" = 200 ]; then need_pypi=false; else need_pypi=true; fi
+          if npm view "$name@$py" version >/dev/null 2>&1; then need_npm=false; else need_npm=true; fi
+          echo "tag needed=$need_release pypi needed=$need_pypi npm needed=$need_npm"
+          {
+            echo "version=$py"
+            echo "need_release=$need_release"
+            echo "need_pypi=$need_pypi"
+            echo "need_npm=$need_npm"
+          } >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: check
+    if: needs.check.outputs.need_release == 'true' && github.event_name != 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the tag and the GitHub release
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Release notes: this version's section of CHANGELOG.md.
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md
+
   build:
+    needs: check
+    if: needs.check.outputs.need_pypi == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - name: Check the tag matches both package versions
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          py=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          npm=$(node -p "require('./npm/package.json').version")
-          echo "tag=$TAG pyproject=$py npm=$npm"
-          test "$TAG" = "v$py" && test "$py" = "$npm"
       - name: Build
         run: uv build
       - name: Check metadata
@@ -27,8 +95,12 @@ jobs:
           name: dist
           path: dist/
 
-  publish:
-    needs: build
+  publish-pypi:
+    needs: [check, release, build]
+    # Run after the release job unless it failed; skipped is fine (tag already there).
+    if: >-
+      always() && needs.check.result == 'success' && needs.build.result == 'success' &&
+      needs.release.result != 'failure' && needs.release.result != 'cancelled'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -42,7 +114,11 @@ jobs:
 
   # The npm package is a launcher that installs the PyPI release, so it goes out after PyPI.
   publish-npm:
-    needs: publish
+    needs: [check, release, publish-pypi]
+    if: >-
+      always() && needs.check.result == 'success' && needs.check.outputs.need_npm == 'true' &&
+      needs.release.result != 'failure' && needs.release.result != 'cancelled' &&
+      (needs.publish-pypi.result == 'success' || needs.check.outputs.need_pypi == 'false')
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -53,13 +129,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
       - name: Use an npm that supports Trusted Publishing
         run: npm install -g npm@11
       - name: Publish
         working-directory: npm
-        # With Trusted Publishing set up on npmjs.com no token is needed; otherwise add an
-        # NPM_TOKEN secret to the "npm" environment.
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance

@@ -1,11 +1,11 @@
-# claude-code-tier-router (npm)
+# @satya-prakash/claude-code-router (npm launcher)
 
 npm launcher for [claude-code-router](https://github.com/ai-solution-architect-roadmap/claude-code-router),
 which routes Claude Code tasks to the cheapest sufficient model and effort. It installs the `ccr`
 command.
 
 ```sh
-npm install -g claude-code-tier-router
+npm install -g @satya-prakash/claude-code-router
 ccr --help
 ```
 
