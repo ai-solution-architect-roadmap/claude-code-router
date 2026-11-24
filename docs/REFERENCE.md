@@ -284,6 +284,10 @@ run:                         # headless `ccr run`
   timeout_s: 3600            # wall clock per attempt
   permission_mode: null      # passed as --permission-mode (e.g. acceptEdits)
 
+lint:                        # prompt linter (see "Prompt linter" below)
+  mode: hint                 # off | hint (show a hint, never block) | strict (stop a vague
+                             # prompt once; sending it again goes through)
+
 hooks:
   enabled: true              # master switch
   route_prompts: true        # inject the routing line
@@ -363,7 +367,7 @@ Every hook **fails open**. Bad input, a missing or corrupt config or graph, an e
 or a run longer than the watchdog (`hooks.watchdog_ms`, 1.5 s, or `predict.timeout_s` + 1 s
 for the prompt hook when the change prediction is on; Claude Code's own timeout is 15 s for
 the prompt hook and 5 s for the others) produces no output and exit code 0. The hook never exits with code 2, so a
-prompt is never blocked. Hooks import neither typer nor tree-sitter and only read the
+prompt is never blocked (the one exception is the opt-in `lint.mode: strict`, below). Hooks import neither typer nor tree-sitter and only read the
 graph. A warm prompt hook takes about 60 ms in-process and about 150 ms as a process.
 Problems go to `.ccr/local/hooks.log`. Set `CCR_HOOK_DEBUG=1` to also log input field
 names (never their values).
@@ -376,6 +380,47 @@ The hook stays silent for:
 - short chatter ("thanks", "go on"), which continues the current task;
 - `hooks.route_prompts: false` or `hooks.enabled: false`;
 - ccr's own `claude -p` calls (`CCR_INTERNAL=1`).
+
+## Prompt linter
+
+Vague prompts make the worst routing and the longest sessions: "the app crashes" or "improve
+error handling" name no code, so ccr guesses the tier and Claude spends turns finding the
+place. The prompt linter adds **one hint line for you** when a prompt is that vague, and stays
+silent otherwise. It reuses the routing signals (task class, vagueness, located files, code
+graph), so it costs no model call and almost no time.
+
+```
+ccr → T2 sonnet/medium · ccr-implement · bugfix
+ccr hint: No file named. Did you mean `app/payments/ledger.py`? Naming it helps Claude start in the right place.
+```
+
+It reports at most one finding per prompt:
+
+| Finding | When | Hint |
+|---------|------|------|
+| `missing_path` | a named file does not exist (`ccr/confg.py`) | the closest real file: "Did you mean `ccr/config.py`?" |
+| `no_anchor` | a change request (bug fix, feature, refactor, ...) names no code ccr can find, and is vague ("the app crashes", "improve error handling", "fix the bug") | the likely file when ccr has a guess, your uncommitted edits when the guess comes from them, otherwise a request for the file, command or error message |
+
+It never lints questions, design talks, trivial edits, step-by-step prompts, prompts that name
+a file or symbol, retries, or short follow-ups in an ongoing task ("fix it" after a discussion
+is clear enough). On the 48-prompt routing probe set it hints on 2 prompts, "the app crashes"
+and "improve error handling".
+
+Modes (`lint.mode` in `.ccr/config.yaml`):
+
+- `hint` (default): show the hint; the prompt goes through unchanged. Shown even with
+  `hooks.show_in_ui: false`.
+- `strict`: stop a vague prompt once, with the hint as the reason. Add the detail, or send the
+  same prompt again to go ahead as it is.
+- `off`: no linting.
+
+Add `!nolint` to a prompt to skip the linter for it. `ccr explain` shows the finding on a
+`Prompt:` line (and as `lint` in `--json`).
+
+Each task record whose prompt got a hint carries `lint: {code, suggested, mode}` (no prompt text or paths) in
+`.ccr/history.jsonl`, and `ccr stats` compares those tasks with the rest (success rate, turns,
+tool errors) once there is at least one. It is a first look, not a controlled comparison:
+vague prompts tend to be harder work anyway.
 
 ## Headless runs (`ccr run`)
 

@@ -128,13 +128,23 @@ def effort_level(v) -> str | None:
 
 
 class Msg(str):
-    """Model-facing hook text that also carries a short user-facing line (`.ui`)."""
+    """Model-facing hook text that also carries a short user-facing line (`.ui`), a prompt
+    linter hint for the user (`.hint`) and, in strict lint mode, a reason to stop the prompt
+    (`.block`). The text may be empty when only a hint or a block is sent."""
     ui: str | None = None
+    hint: str | None = None
+    block: str | None = None
 
-    def __new__(cls, text: str, ui: str | None = None):
+    def __new__(cls, text: str, ui: str | None = None, hint: str | None = None,
+                block: str | None = None):
         o = super().__new__(cls, text)
         o.ui = ui
+        o.hint = hint
+        o.block = block
         return o
+
+    def __bool__(self) -> bool:
+        return bool(str(self) or self.hint or self.block)
 
 
 def main_model(root: Path, sid: str | None, session: dict) -> tuple[str | None, str | None]:

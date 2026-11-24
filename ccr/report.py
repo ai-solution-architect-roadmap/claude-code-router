@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-def format_decision(task: str, d) -> list[str]:
+def format_decision(task: str, d, lint=None) -> list[str]:
     from ccr.evaluate.risk import COMPONENTS, LABELS
     tc, loc, r, b = d.task_class, d.location, d.risk, d.budget
     short = " ".join(task.split())
@@ -36,5 +36,7 @@ def format_decision(task: str, d) -> list[str]:
     out += [f"  - {x}" for x in d.reasons]
     for n in d.notes:
         out.append(f"Note:      {n}")
+    if lint is not None:
+        out.append(f"Prompt:    {lint.hint}  [lint: {lint.code}]")
     out.append(f"(evaluated in {d.elapsed_ms:.0f} ms; explain runs nothing)")
     return out

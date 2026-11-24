@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+- Prompt linter (`lint.mode`, default `hint`): one hint line for you when a prompt is too
+  vague to act on well, such as a bug report that names no file ("Did you mean
+  `app/config.py`?") or a named file that does not exist. Silent on clear prompts, never
+  blocks; `strict` stops a vague prompt once, `off` disables it, `!nolint` skips one prompt.
+  Hinted tasks carry `lint` in history and `ccr stats` compares them with the rest.
+
 ## [0.2.1] - 2026-11-24
 
 ### Changed

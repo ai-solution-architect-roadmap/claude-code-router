@@ -154,6 +154,12 @@ DEFAULTS: dict = {
         "timeout_s": 3600,           # wall clock per attempt
         "permission_mode": None,     # passed as --permission-mode (e.g. acceptEdits)
     },
+    # Prompt linter (ccr/evaluate/lint.py): one hint line when a prompt is too vague to act
+    # on well, e.g. a bug report that names no file. Reuses the routing signals; no model call.
+    "lint": {
+        "mode": "hint",              # off | hint (show a hint, never block) | strict (stop a
+                                     # vague prompt once; sending it again goes through)
+    },
     # Claude Code hooks installed by `ccr init`. All hooks fail open (silent, exit 0).
     "hooks": {
         "enabled": True,             # master switch for every ccr hook
@@ -568,10 +574,26 @@ def _merge_hooks(cfg: Config, raw: dict) -> None:
         cfg.errors.append("hooks: expected a mapping")
 
 
+def _merge_lint(cfg: Config, raw: dict) -> None:
+    sec = raw.get("lint")
+    if sec is None:
+        return
+    if not isinstance(sec, dict):
+        cfg.errors.append("lint: expected a mapping")
+        return
+    for k, v in sec.items():
+        if k != "mode":
+            cfg.warnings.append(f"lint.{k}: unknown field ignored")
+        elif v is False or v in ("off", "hint", "strict"):
+            cfg.data["lint"]["mode"] = "off" if v is False else v
+        else:
+            cfg.errors.append(f"lint.mode: expected off, hint or strict, got {v!r}")
+
+
 # One validator per config section, run in this order; add a section by appending here.
 _MERGERS = (_merge_tiers, _merge_class_base, _merge_critical, _merge_hard_terms, _merge_pricing,
             _merge_risk, _merge_budget, _merge_history, _merge_run, _merge_llm, _merge_routing,
-            _merge_code_first, _merge_predict, _merge_hooks)
+            _merge_code_first, _merge_predict, _merge_lint, _merge_hooks)
 
 
 def _section(cfg: Config, raw: dict, name: str, ranges: dict[str, tuple[float, float]],

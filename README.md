@@ -87,6 +87,23 @@ claude                 # work as usual
 
 Re-running `ccr init` is safe. To skip routing for one prompt, put `!noroute` at the end of it.
 
+### Prompt hints
+
+When a prompt is too vague to act on well, ccr adds one hint line for you and lets the prompt
+through. Clear prompts get no hint.
+
+```
+> the app crashes
+ccr hint: No file, command or error named. Say where it happens or paste the error message.
+> fix the crash in ccr/confg.py
+ccr hint: `ccr/confg.py` does not exist. Did you mean `ccr/config.py`?
+```
+
+It reuses the routing signals, so it costs no model call. Set `lint.mode: strict` in
+`.ccr/config.yaml` to stop a vague prompt once instead (sending it again goes through), or
+`off` to turn it off; `!nolint` skips it for one prompt. Details in
+[docs/REFERENCE.md](docs/REFERENCE.md#prompt-linter).
+
 ## Commands
 
 Every command accepts `--path DIR` (project root, default `.`) and `--help`. Run `ccr --help`

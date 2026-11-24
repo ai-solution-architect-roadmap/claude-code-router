@@ -33,7 +33,7 @@ FIELDS = ("id", "type", "ref", "feedback",
           "run_id", "attempt", "reason", "subtype", "exit_code", "usage", "models",
           "duration_ms", "test", "forced", "assist_cost_usd",
           # routing signals behind the decision (Decision.trace(): no prompt text)
-          "trace")
+          "trace", "lint")
 OUTCOMES = ("success", "failure", "escalated", "abandoned", "error")
 SUCCESS = {"success"}
 FAILURE = {"failure", "escalated"}
