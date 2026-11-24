@@ -173,7 +173,10 @@ Prompt length is not a signal. The code the task touches is.
 and recent commits also help find the files, and a score of that code (files, lines already
 changed, dependents, complexity, tests, churn, critical paths, memory flags) can raise a real
 code change by one tier above the steps above. It never lowers a tier, never moves trivial
-edits or questions, and steps or small-scope words still win. See [Code-first routing](CODE_FIRST_ROUTING.md).
+edits or questions, and steps or small-scope words still win. With `predict.enabled: true`,
+prompts where routing is unsure also ask Haiku (your claude CLI, up to 5 s) to predict the
+change; a small change lowers the tier by one and a large one raises it by one, never past a
+T4 rule or below a critical path. See [Code-first routing](CODE_FIRST_ROUTING.md).
 
 ## Configuration reference (`.ccr/config.yaml`)
 
@@ -265,6 +268,14 @@ code_first:                  # opt in: the code can raise a change, see docs/COD
   min_confidence: 0.5        # location confidence needed to route from the code
   bands: [0.2, 0.4, 0.6]     # code score edges: T1 | T2 | T2H | T3
   tie_margin: 0.04           # near an edge, the keyword class breaks the tie
+
+predict:                     # opt in: Haiku predicts the change when routing is unsure
+  enabled: false
+  model: haiku
+  effort: low
+  timeout_s: 5               # hard limit; a late answer leaves routing as it was
+  min_confidence: 0.6
+  boundary: 0.08             # code score this close to a band edge counts as unsure
 
 run:                         # headless `ccr run`
   test_command: null         # e.g. "pytest -q"; must exit 0 for success

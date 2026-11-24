@@ -54,9 +54,14 @@ class CodeTier:
     lines: int = 0
     reasons: list[str] = field(default_factory=list)
     fallback: str | None = None      # why keyword-first routing was used instead
+    keyword_tier: str | None = None  # the tier before the code could raise it
+
+    def near_edge(self, bands: list[float], margin: float) -> bool:
+        return self.score is not None and any(abs(self.score - e) < margin for e in bands)
 
     def to_dict(self) -> dict:
         return {"applies": self.applies, "tier": self.tier, "score": self.score,
+                "keyword_tier": self.keyword_tier,
                 "parts": self.parts, "files": self.files, "lines": self.lines,
                 "fallback": self.fallback}
 

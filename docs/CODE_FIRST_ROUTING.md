@@ -1,7 +1,7 @@
 # Code-first routing
 
-Status: steps 1 and 3 prototyped behind `code_first.enabled` (off by default). Steps 2 and 4
-are designed here and come next.
+Status: steps 1 and 3 prototyped behind `code_first.enabled`, step 2 behind `predict.enabled`
+(both off by default). Step 4 is designed here and comes next.
 
 ## Problem
 
@@ -52,19 +52,72 @@ So "finish this and make it work" while you have `app/reports/export.py` open an
 locates that file, and a prompt that names a file you are already changing becomes certain.
 More than 200 changed files (a mass rewrite or a generated tree) are ignored as a signal.
 
-## Step 2: predict the change (next)
+## Step 2: predict the change (built)
 
-A cheap Haiku call, off by default, with a short time limit (target under 1.5 s, the hook's
-watchdog). Input: the prompt, the top located files' outlines from the graph (symbols and
-signatures, not full source), and the uncommitted diff stat. Output, as JSON:
+`ccr/evaluate/predict.py`, opt in with `predict.enabled`. It asks Haiku through your own
+`claude` CLI (no API key), the same way `ccr explain --llm` does.
 
-- the files likely to change, with a confidence each;
-- rough size (lines) per file;
-- whether a public interface, schema or config contract changes.
+**When it asks.** Only for real code changes (tests, bugfix, feature, refactor, perf,
+migration, security, debugging) that some file was located for, with no T4 rule, and only
+when routing is unsure:
 
-The answer replaces the `REACH` factor in step 3 (see below) with a real prediction, and adds
-predicted files to the candidate set the way the existing `ccr explain --llm` hint does. On a
-timeout or a bad answer, step 3 runs on step 1 alone.
+- overall confidence below `llm.threshold` (0.5);
+- a code score within `predict.boundary` (0.08) of a band edge;
+- or keywords and code disagreeing by two tiers or more.
+
+Questions, design, trivial edits and confident routes never wait.
+
+**What it sends.** The prompt, the top 5 located files with their symbol outlines from the
+graph (kind, name, line span; no source), and the uncommitted diff stat.
+
+**What it gets back.** One JSON object: files with confidences, estimated lines, reach
+(`one_function`, `one_file`, `few_files`, `cross_cutting`), whether an interface or a schema
+changes, a confidence and a short reason. Predicted files that do not exist are dropped,
+unless a new file sits in a located directory; if every file was invented, its confidence is
+halved.
+
+**How it moves the tier.** The answer becomes a size:
+
+| Size | When |
+| --- | --- |
+| large | schema change, cross-cutting, 4+ files, or 300+ lines |
+| small | one function or one file, 1 file, up to 30 lines, no interface change |
+| medium | everything else |
+
+Small lowers the tier by one, large raises it by one, medium leaves it. Limits:
+
+- below `predict.min_confidence` (0.6) the prediction is shown but not used;
+- the result stays within one tier of the keyword route, so it never stacks on a code raise,
+  and a small prediction can cancel one;
+- it never lowers a critical path, perf work (a small patch says nothing about the measuring
+  it takes to find it), or a code change below T1;
+- T4 rules, history, the ceiling and budget pressure still apply after.
+
+**Speed and cost.** The hard limit is `predict.timeout_s` (5 s); a late or broken answer
+leaves routing as it was and adds a note. The prompt hook's watchdog grows to the timeout
+plus 1 s when prediction is on. Answers are cached in `.ccr/local/predict-cache.json` (300
+entries, answers only, no prompt text) keyed by the prompt, the located files, the
+uncommitted diff and HEAD. Measured on this container, the CLI takes 4 to 6.8 s per call
+(about 0.85 s of that is Haiku; the rest is CLI start-up), at about $0.0005 a call.
+
+### Results with real Haiku
+
+On ccr's own code (17 probe prompts, including the 11 that the first code-first version made
+worse): asked on 9, changed 5.
+
+| Prompt | Main | Code-first | + prediction |
+| --- | --- | --- | --- |
+| fix the flaky test in tests/test_history.py | T3 | T3 | T2H (target) |
+| use pydantic to validate the config in ccr/config.py | T2H | T2H | T2H, matches the other wording (target) |
+| fix the null check in ccr/config.py (3 wordings) | T2 | T2 | T1 (a 4 to 6 line guard in one function) |
+| just make a small fix to the budget rounding | T2 | T2 | T1 |
+
+On the 39 fixture samples: asked on 15, changed 2 against code-first alone.
+
+| Prompt | Expected | Code-first | + prediction |
+| --- | --- | --- | --- |
+| Fix the bug where formatPrice shows NaN for zero amounts | T1 | T2 | T1 (better) |
+| Fix the data race in the LRU cache | T3 | T3 | T2H (worse: Haiku sees a one-lock fix) |
 
 ## Step 3: decide from the code (built)
 
@@ -114,9 +167,8 @@ The first version let the code score set the tier outright. On a 48-prompt probe
 ccr's own code it moved 15 tiers, and 11 of those got worse: "fix the typo in the error
 message in ccr/cli.py", "add a comment", "rename decide" went T0 to T2H, null-check fixes in
 `ccr/config.py` went to T3, and explicit steps stopped lowering the tier. Those prompts are
-now regression tests (`tests/test_code_first.py::PROBE`). The raise-only rule loses the two
-cases that improved ("fix the flaky test" dropping from T3 to T2H), which step 2 can revisit
-with a real change prediction.
+now regression tests (`tests/test_code_first.py::PROBE`). The raise-only rule lost the two
+cases that improved; step 2 brings them back.
 
 On the 39 fixture table cases, the raise-only rule moves 2 tiers, both up by one:
 "Fix the bug where formatPrice shows NaN for zero amounts" (T1 to T2, a widely imported
@@ -145,6 +197,14 @@ code_first:
   min_confidence: 0.5   # location confidence needed to route from the code
   bands: [0.2, 0.4, 0.6]   # code score edges: T1 | T2 | T2H | T3
   tie_margin: 0.04      # near an edge, the keyword class breaks the tie
+
+predict:                # step 2, needs your claude CLI
+  enabled: false
+  model: haiku
+  effort: low
+  timeout_s: 5          # hard limit; a late answer leaves routing as it was
+  min_confidence: 0.6   # below this the prediction is shown, not used
+  boundary: 0.08        # code score this close to a band edge counts as unsure
 ```
 
 `ccr explain "<task>"` shows the code score, its top components and whether it raised the
