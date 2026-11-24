@@ -1,5 +1,5 @@
-"""Code-first routing (`code_first.enabled`): files from the real repository state, tier from
-the code score, keywords only break ties. Off by default."""
+"""Code-first routing (always on): files from the real repository state, and a code score
+that can raise a real code change by one tier above its keyword route."""
 import shutil
 
 import pytest

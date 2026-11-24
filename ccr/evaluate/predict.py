@@ -1,7 +1,7 @@
 """Step 2 of code-first routing: ask Haiku to predict the change a task will make.
 
-Opt in with `predict.enabled`. Only asked when routing is unsure (low confidence, a code score
-near a band edge, or keywords and code disagreeing by two tiers or more), with a hard
+Always on; skipped without the claude CLI. Only asked when routing is unsure (low
+confidence, a code score near a band edge, or keywords and code disagreeing by two tiers or more), with a hard
 timeout, and answers are cached per prompt and repository state. Goes through the user's own
 `claude` CLI like `ccr explain --llm` (ccr.evaluate.llm.run_claude), so tests mock one runner.
 
