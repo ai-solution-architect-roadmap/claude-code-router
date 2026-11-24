@@ -66,7 +66,7 @@ def test_fresh_init_creates_everything_and_is_idempotent(env):
     for ev, name in (("SessionStart", "session-start"), ("UserPromptSubmit", "prompt"),
                      ("SubagentStop", "stop"), ("Stop", "stop")):
         assert s["hooks"][ev] == [{"hooks": [{"type": "command", "command": f"ccr hook {name}",
-                                              "timeout": 5}]}]
+                                              "timeout": 15 if name == "prompt" else 5}]}]
     assert (root / ".ccr" / "history.jsonl").read_text() == ""
     gi = (root / ".gitignore").read_text()
     assert ".ccr/graph.db*" in gi and ".ccr/local/" in gi and ".ccr/backups/" in gi

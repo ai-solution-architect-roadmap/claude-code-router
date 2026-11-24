@@ -94,6 +94,7 @@ def test_config_validates_predict(tmp_path):
     assert cfg["predict"]["enabled"] is True and cfg["predict"]["timeout_s"] == 3
     assert any("predict.effort" in e for e in cfg.errors)
     assert default_config()["predict"]["enabled"] is False
+    assert default_config()["predict"]["timeout_s"] == 10.0
 
 
 # --------------------------------------------------------------------------- gating
@@ -245,7 +246,40 @@ def test_hook_budget_makes_room_for_the_prediction(tmp_path):
     raw = json.dumps({"prompt": "hi", "cwd": str(tmp_path)}).encode()
     result = {}
     _body("prompt", raw, {"CLAUDE_PROJECT_DIR": str(tmp_path)}, result)
-    assert result.get("budget") == 6.0
+    assert result.get("budget") == 6.0        # timeout_s 5 in this config, + 1 s
     result = {}
     _body("stop", raw, {"CLAUDE_PROJECT_DIR": str(tmp_path)}, result)
     assert result.get("budget") == 1.5
+
+
+def test_large_prediction_does_not_stack_on_a_code_driven_rise(fresh):
+    root, mem = fresh["shop_py"]
+    task = "Refactor Engine.run into smaller functions without changing behaviour"
+    before = _decide(root, task, _cfg(predict=False), None, mem)
+    assert any(b.startswith(("complex code", "risk high")) for b in before.bumps), before.reasons
+    from ccr.route import _predict_adjust
+    from ccr.evaluate.predict import parse as P
+    reasons = []
+    t = before.tier.index
+    tier, used = _predict_adjust(t, t, P(json.dumps(LARGE)), before.task_class, before.risk,
+                                 False, _cfg(), reasons, code_rose=True)
+    assert tier == t and not used and "already rose" in reasons[-1]
+
+
+def test_predictor_starts_the_cli_lean(monkeypatch):
+    monkeypatch.setattr(L.shutil, "which", lambda _: "/bin/claude")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cmd = L.claude_command("haiku", "low", lean=True)
+    assert cmd[-3:] == ["--setting-sources", "user", "--disable-slash-commands"]
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    assert L.claude_command("haiku", "low", lean=True)[-1] == "--bare"
+    assert "--bare" not in L.claude_command("haiku", "low")       # ccr explain --llm unchanged
+
+
+def test_predict_timeout_fits_the_hook_timeout(tmp_path):
+    from ccr.install.settings import HOOKS
+    (tmp_path / ".ccr").mkdir()
+    (tmp_path / ".ccr" / "config.yaml").write_text("predict:\n  timeout_s: 30\n")
+    cfg = load_config(tmp_path)
+    assert any("predict.timeout_s" in e for e in cfg.errors)
+    assert HOOKS["UserPromptSubmit"][1] >= 13 + 1 + 1

@@ -93,12 +93,29 @@ Small lowers the tier by one, large raises it by one, medium leaves it. Limits:
   it takes to find it), or a code change below T1;
 - T4 rules, history, the ceiling and budget pressure still apply after.
 
-**Speed and cost.** The hard limit is `predict.timeout_s` (5 s); a late or broken answer
+**Speed and cost.** The hard limit is `predict.timeout_s` (10 s, at most 13); a late or broken answer
 leaves routing as it was and adds a note. The prompt hook's watchdog grows to the timeout
 plus 1 s when prediction is on. Answers are cached in `.ccr/local/predict-cache.json` (300
 entries, answers only, no prompt text) keyed by the prompt, the located files, the
 uncommitted diff and HEAD. Measured on this container, the CLI takes 4 to 6.8 s per call
-(about 0.85 s of that is Haiku; the rest is CLI start-up), at about $0.0005 a call.
+(about 0.85 s of that is Haiku; the rest is CLI start-up), at about $0.0005 a call. The
+predictor starts the CLI lean: without project settings (and so without their hooks) or
+slash commands, which saves about 0.4 s, or in minimal `--bare` mode when
+`ANTHROPIC_API_KEY` is set (about 0.7 s in total). The first version used a 5 s limit, and
+Claude Code's own 5 s hook timeout cut calls off too; on the 48-prompt probe 4 calls timed
+out and repeated runs disagreed. `ccr init` now gives the prompt hook a 15 s Claude Code
+timeout; re-run it after turning prediction on.
+
+Starting the call earlier in the hook was considered: routing before the call takes about
+60 to 150 ms, so overlapping it would save under 0.2 s of a 4 s call, and the call can only
+be built once routing has located the files and decided it is unsure.
+
+A large prediction does not raise a task whose keyword route already rose for complex,
+risky or critical code, the same no-double-count rule the code score follows. This is the likely
+cause of "improve the error handling in ccr/cli.py" reaching T3 on the probe: its keyword
+route had already risen for complex code. Four fresh Haiku calls on it here all answered
+"one file, 60 to 90 lines" (medium), so the T3 came from a rarer large answer stacking on
+that rise, which this rule now blocks.
 
 ### Results with real Haiku
 
@@ -202,7 +219,7 @@ predict:                # step 2, needs your claude CLI
   enabled: false
   model: haiku
   effort: low
-  timeout_s: 5          # hard limit; a late answer leaves routing as it was
+  timeout_s: 10         # hard limit (max 13); a late answer leaves routing as it was
   min_confidence: 0.6   # below this the prediction is shown, not used
   boundary: 0.08        # code score this close to a band edge counts as unsure
 ```

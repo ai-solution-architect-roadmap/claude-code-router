@@ -566,9 +566,12 @@ def _unsure(d: Decision, cfg: Config) -> str | None:
 
 
 def _predict_adjust(tier: int, keyword_tier: int, pr, tc: TaskClass, risk: Risk,
-                    critical_up: bool, cfg: Config, reasons: list[str]) -> tuple[int, bool]:
+                    critical_up: bool, cfg: Config, reasons: list[str],
+                    code_rose: bool = False) -> tuple[int, bool]:
     """Move the tier by one at most on Haiku's predicted change. The result stays within one
-    tier of the keyword route; a critical path is never lowered and T4 rules apply after."""
+    tier of the keyword route; a critical path is never lowered and T4 rules apply after.
+    `code_rose`: the keyword route already rose for complex, risky or critical code, so a
+    large prediction does not raise it a second time for the same reason."""
     head = f"change prediction: {pr.summary()} -> {pr.size}"
     if pr.confidence < float(cfg["predict"]["min_confidence"]):
         reasons.append(f"{head}; not used (confidence below "
@@ -591,6 +594,9 @@ def _predict_adjust(tier: int, keyword_tier: int, pr, tc: TaskClass, risk: Risk,
         reasons.append(f"{head}; -1 -> {TIERS[new]}")
         return new, True
     if pr.size == "large":
+        if code_rose:
+            reasons.append(f"{head}; the route already rose for this code")
+            return tier, False
         new = min(_climb(t, 1), _climb(keyword_tier, 1))
         if new <= t:
             reasons.append(f"{head}; the code already raised it")
@@ -631,8 +637,9 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
         tier = _code_raise(tier, code, ups, downs, reasons)
     predict_used = False
     if prediction is not None:
+        code_rose = any(u.startswith(_CODE_UP + _CRITICAL_UP) for u in ups)
         tier, predict_used = _predict_adjust(tier, keyword_tier, prediction, tc, risk,
-                                             critical_up, cfg, reasons)
+                                             critical_up, cfg, reasons, code_rose)
 
     # history (learning loop, ccr/history/learn.py)
     from ccr.history import learn

@@ -174,7 +174,7 @@ and recent commits also help find the files, and a score of that code (files, li
 changed, dependents, complexity, tests, churn, critical paths, memory flags) can raise a real
 code change by one tier above the steps above. It never lowers a tier, never moves trivial
 edits or questions, and steps or small-scope words still win. With `predict.enabled: true`,
-prompts where routing is unsure also ask Haiku (your claude CLI, up to 5 s) to predict the
+prompts where routing is unsure also ask Haiku (your claude CLI, up to 10 s) to predict the
 change; a small change lowers the tier by one and a large one raises it by one, never past a
 T4 rule or below a critical path. See [Code-first routing](CODE_FIRST_ROUTING.md).
 
@@ -273,7 +273,7 @@ predict:                     # opt in: Haiku predicts the change when routing is
   enabled: false
   model: haiku
   effort: low
-  timeout_s: 5               # hard limit; a late answer leaves routing as it was
+  timeout_s: 10              # hard limit (max 13); a late answer leaves routing as it was
   min_confidence: 0.6
   boundary: 0.08             # code score this close to a band edge counts as unsure
 
@@ -362,8 +362,9 @@ The prompt hook uses that state in two ways:
 | Stop, SubagentStop | `ccr hook stop` | adds tokens (once per message id), subagent types, tool errors and failure hints to the pending task |
 
 Every hook **fails open**. Bad input, a missing or corrupt config or graph, an exception,
-or a run longer than the watchdog (`hooks.watchdog_ms`, 1.5 s; Claude Code's own timeout is
-set to 5 s) produces no output and exit code 0. The hook never exits with code 2, so a
+or a run longer than the watchdog (`hooks.watchdog_ms`, 1.5 s, or `predict.timeout_s` + 1 s
+for the prompt hook when the change prediction is on; Claude Code's own timeout is 15 s for
+the prompt hook and 5 s for the others) produces no output and exit code 0. The hook never exits with code 2, so a
 prompt is never blocked. Hooks import neither typer nor tree-sitter and only read the
 graph. A warm prompt hook takes about 60 ms in-process and about 150 ms as a process.
 Problems go to `.ccr/local/hooks.log`. Set `CCR_HOOK_DEBUG=1` to also log input field

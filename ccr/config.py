@@ -140,7 +140,8 @@ DEFAULTS: dict = {
         "enabled": False,
         "model": "haiku",
         "effort": "low",
-        "timeout_s": 5.0,            # hard limit; a late answer leaves routing as it was
+        "timeout_s": 10.0,           # hard limit; a late answer leaves routing as it was.
+                                     # The claude CLI takes about 4-5 s per call
         "min_confidence": 0.6,       # below this the prediction is reported, not used
         "boundary": 0.08,            # code score this close to a band edge counts as unsure
     },
@@ -542,7 +543,8 @@ def _merge_predict(cfg: Config, raw: dict) -> None:
                 cfg.errors.append(f"predict.effort: must be one of {'|'.join(EFFORTS)}, "
                                   f"got {v!r}")
         elif k in ("timeout_s", "min_confidence", "boundary"):
-            lo, hi = (0.5, 60) if k == "timeout_s" else (0, 1)
+            # the prompt hook's Claude Code timeout is 15 s (ccr/install/settings.py)
+            lo, hi = (0.5, 13) if k == "timeout_s" else (0, 1)
             if _num(cfg, f"predict.{k}", v, lo, hi):
                 d[k] = float(v)
         else:

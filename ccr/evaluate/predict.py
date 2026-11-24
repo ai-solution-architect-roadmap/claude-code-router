@@ -257,7 +257,7 @@ def predict(task: str, root, graph, located: list[str], *, workspace=None, cfg=N
     from ccr.evaluate import llm as L
     root = Path(root)
     pc = cfg["predict"] if cfg is not None else {"model": "haiku", "effort": "low",
-                                                 "timeout_s": 5.0}
+                                                 "timeout_s": 10.0}
     head = None
     try:
         from ccr.graph import git as G
@@ -270,10 +270,14 @@ def predict(task: str, root, graph, located: list[str], *, workspace=None, cfg=N
     if hit is not None:
         return hit, "cached"
     t0 = time.perf_counter()
-    runner = runner or L.run_claude
     try:
-        data = runner(build_prompt(task, graph, located, workspace), model=pc["model"],
-                      effort=pc["effort"], timeout=float(pc["timeout_s"]))
+        prompt = build_prompt(task, graph, located, workspace)
+        if runner is None:
+            data = L.run_claude(prompt, model=pc["model"], effort=pc["effort"],
+                                timeout=float(pc["timeout_s"]), lean=True)
+        else:
+            data = runner(prompt, model=pc["model"], effort=pc["effort"],
+                          timeout=float(pc["timeout_s"]))
     except L.LLMUnavailable as e:
         return None, f"unavailable: {e}"
     except Exception as e:  # a broken runner must not break routing
