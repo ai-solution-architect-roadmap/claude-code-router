@@ -91,6 +91,23 @@ def _check_hooks(hooks: object, where: str) -> dict:
     return hooks
 
 
+def installed_prompt_timeout(root: Path) -> float | None:
+    """Claude Code's timeout (s) on ccr's UserPromptSubmit hook in the project settings, or
+    None when it is not found. Read on every prompt, so plain json and no validation."""
+    import json
+    for name in ("settings.local.json", "settings.json"):
+        try:
+            data = json.loads((Path(root) / ".claude" / name).read_text(encoding="utf-8"))
+            for g in data.get("hooks", {}).get("UserPromptSubmit", []):
+                for h in g.get("hooks", []):
+                    if _is_our_hook(h) and "prompt" in str(h.get("command", "")):
+                        t = h.get("timeout")
+                        return float(t) if isinstance(t, (int, float)) else 60.0
+        except Exception:
+            continue
+    return None
+
+
 def _is_our_hook(h: object) -> bool:
     return isinstance(h, dict) and our_subcommand(str(h.get("command", ""))) == "hook"
 

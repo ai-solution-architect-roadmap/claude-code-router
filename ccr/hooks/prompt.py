@@ -233,7 +233,8 @@ def _follow_up(prompt: str, d, pending: dict, session: dict, root, cfg, graph_kw
     note = None
     files = [f for f in session.get("files") or [] if isinstance(f, str)]
     if files and not d.location.located:
-        d = decide(prompt[:MAX_EVAL_CHARS] + "\n" + " ".join(files), root, cfg=cfg, **graph_kw)
+        d = decide(prompt[:MAX_EVAL_CHARS] + "\n" + " ".join(files), root, cfg=cfg,
+                   allow_predict=False, **graph_kw)     # one Haiku wait per prompt at most
         note = "uses the files from the previous task"
     inherit = None
     if d.task_class.confidence < FOLLOWUP_MAX_CONFIDENCE and pending.get("tier") \

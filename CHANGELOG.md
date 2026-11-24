@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.2.1] - unreleased
+
+### Changed
+- Code-first routing and the Haiku change prediction are always on; `code_first.enabled` and
+  `predict.enabled` are gone (an old setting is ignored with a warning). Without the `claude`
+  CLI, or when Haiku is late, routing silently keeps its rule-based tier.
+- Recent commits only strengthen a file match that already stands on its own, and are ignored
+  when they touch more than 40 files (an initial import), so a fresh repo no longer turns a
+  loose word match into a critical path.
+- A follow-up prompt waits for Haiku at most once.
+
+### Added
+- The prompt hook keeps the prediction inside Claude Code's installed hook timeout, and
+  `ccr doctor` warns when that timeout is under 15 s (re-run `ccr init`).
+- `CCR_NO_PREDICT=1` keeps test suites from calling the real CLI.
+
 ## [0.2.0] - unreleased
 
 ### Added

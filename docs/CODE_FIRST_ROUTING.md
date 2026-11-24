@@ -1,7 +1,7 @@
 # Code-first routing
 
-Status: steps 1 and 3 prototyped behind `code_first.enabled`, step 2 behind `predict.enabled`
-(both off by default). Step 4 is designed here and comes next.
+Status: steps 1, 2 and 3 are always on since 0.2.1 (they were opt in in 0.2.0). Step 4 is
+designed here and comes next.
 
 ## Problem
 
@@ -54,7 +54,7 @@ More than 200 changed files (a mass rewrite or a generated tree) are ignored as 
 
 ## Step 2: predict the change (built)
 
-`ccr/evaluate/predict.py`, opt in with `predict.enabled`. It asks Haiku through your own
+`ccr/evaluate/predict.py`, always on. It asks Haiku through your own
 `claude` CLI (no API key), the same way `ccr explain --llm` does.
 
 **When it asks.** Only for real code changes (tests, bugfix, feature, refactor, perf,
@@ -208,21 +208,25 @@ The hook must stay well under the 1.5 s watchdog: one `git diff --numstat`, no g
 ## Configuration
 
 ```yaml
-code_first:
-  enabled: false        # opt in
+code_first:             # always on; an old `enabled` key is ignored with a warning
   recent_commits: 5     # files from the last N commits strengthen a match
   min_confidence: 0.5   # location confidence needed to route from the code
   bands: [0.2, 0.4, 0.6]   # code score edges: T1 | T2 | T2H | T3
   tie_margin: 0.04      # near an edge, the keyword class breaks the tie
 
-predict:                # step 2, needs your claude CLI
-  enabled: false
+predict:                # step 2, always on; needs your claude CLI, else it is skipped
   model: haiku
   effort: low
   timeout_s: 10         # hard limit (max 13); a late answer leaves routing as it was
   min_confidence: 0.6   # below this the prediction is shown, not used
   boundary: 0.08        # code score this close to a band edge counts as unsure
 ```
+
+**Fallbacks.** No claude CLI, a timeout, a bad answer or no time left: routing keeps its
+rule-based tier and the hook stays quiet (`ccr explain` shows a note). An install from before
+0.2.1 gives the prompt hook only 5 s in Claude Code, so the hook shrinks the prediction to fit
+(3 s) and `ccr doctor` asks you to re-run `ccr init`, which sets 15 s. Test suites set
+`CCR_NO_PREDICT=1` so they never reach the real CLI.
 
 `ccr explain "<task>"` shows the code score, its top components and whether it raised the
 tier, or why the keyword tier was kept.

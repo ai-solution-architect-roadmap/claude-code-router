@@ -49,7 +49,14 @@ def _body(name: str, raw: bytes, environ, result: dict) -> tuple[str | None, obj
     cfg = load_config(root)
     if not environ.get("CCR_HOOK_WATCHDOG_MS"):
         result["budget"] = float(cfg["hooks"]["watchdog_ms"]) / 1000.0
-        if cfg["predict"]["enabled"] and name == "prompt":   # room for the Haiku prediction
+        if name == "prompt":   # room for the Haiku change prediction
+            from ccr.install.settings import installed_prompt_timeout
+            limit = installed_prompt_timeout(root)
+            if limit is not None and limit - 2.0 < float(cfg["predict"]["timeout_s"]):
+                # an install from before 0.2.1 gives this hook 5 s: keep the prediction inside
+                # it so Claude Code never kills the hook (and its routing line); `ccr init`
+                # raises it to 15 s
+                cfg.data["predict"]["timeout_s"] = max(0.0, limit - 2.0)
             result["budget"] = max(result["budget"], float(cfg["predict"]["timeout_s"]) + 1.0)
     if cfg.errors and name != "session-start":
         return None, root            # corrupt config: stay out of the way (doctor reports it)

@@ -27,6 +27,22 @@ def git_commit_all(root: Path) -> None:
                        env=env)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_haiku(monkeypatch):
+    """The change prediction is always on; tests never reach the real claude CLI. Tests that
+    pass their own `predict_runner` still exercise the predictor."""
+    from ccr.evaluate import predict as P
+    real = P.predict
+    monkeypatch.setenv("CCR_NO_PREDICT", "1")      # hook subprocesses too
+
+    def guarded(*args, runner=None, **kw):
+        if runner is None:
+            return None, "unavailable: claude CLI not used in tests"
+        return real(*args, runner=runner, **kw)
+    guarded.__wrapped__ = real
+    monkeypatch.setattr(P, "predict", guarded)
+
+
 @pytest.fixture(scope="session")
 def route_env(tmp_path_factory):
     """{name: (root, MemoryReport)} for the routing fixture repos: git history + graph built,

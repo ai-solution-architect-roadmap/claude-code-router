@@ -316,6 +316,7 @@ WS_UNANCHORED = 0.5   # an uncommitted edit when the prompt names no code (split
 WS_NEARBY = 0.2       # an uncommitted edit next to a file the prompt points at
 WS_MAX_UNANCHORED = 10
 RECENT_MATCHED = 0.25  # a file the prompt points at that changed in the last few commits
+RECENT_MAX_FILES = 40  # recent commits touching more files than this say nothing
 
 
 def _match_workspace(c: _Ctx, ws) -> None:
@@ -349,8 +350,12 @@ def _match_workspace(c: _Ctx, ws) -> None:
         if p not in c.uni_set:
             c.universe.append(p)
             c.uni_set.add(p)
+    # recent commits only strengthen a match that already stands on its own, and only when
+    # they are a small slice of the repo (not an initial import or a mass rewrite)
+    if len(ws.recent) > RECENT_MAX_FILES:
+        return
     for p in ws.recent:
-        if p not in ws.dirty and before.get(p, 0.0) >= 0.2:
+        if p not in ws.dirty and before.get(p, 0.0) >= 0.4:
             c.acc.add(p, RECENT_MATCHED, "changed in a recent commit")
             loc.recent.append(p)
 

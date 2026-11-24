@@ -16,9 +16,9 @@ ccr: T2 (sonnet/medium) — touches app/payments/ledger.py, 2 dependents, no tes
 critical path: payments. Delegate implementation to ccr-implement; use Explore (haiku) for search.
 ```
 
-Everything that decides a tier is rule-based, token-free and local. The only model call ccr
-makes on its own is an optional, opt-in classification by haiku through your own `claude`
-CLI.
+The rules, the code graph and your working tree decide most tiers, locally and token-free.
+When they are unsure, the prompt hook also asks haiku, through your own `claude` CLI, to
+predict the change (up to 10 s, cached). Without the CLI, routing stays rule-based.
 
 ---
 
@@ -169,12 +169,12 @@ Prompt length is not a signal. The code the task touches is.
 
 `ccr explain "<task>"` shows each step with its reasons and scores. It runs nothing.
 
-**Code-first routing (opt in).** With `code_first.enabled: true`, your uncommitted edits
+**Code-first routing (always on).** Your uncommitted edits
 and recent commits also help find the files, and a score of that code (files, lines already
 changed, dependents, complexity, tests, churn, critical paths, memory flags) can raise a real
 code change by one tier above the steps above. It never lowers a tier, never moves trivial
-edits or questions, and steps or small-scope words still win. With `predict.enabled: true`,
-prompts where routing is unsure also ask Haiku (your claude CLI, up to 10 s) to predict the
+edits or questions, and steps or small-scope words still win. Prompts where routing is unsure
+also ask Haiku (your claude CLI, up to 10 s) to predict the
 change; a small change lowers the tier by one and a large one raises it by one, never past a
 T4 rule or below a critical path. See [Code-first routing](CODE_FIRST_ROUTING.md).
 
@@ -262,15 +262,13 @@ routing:
   max_escalation: 2          # tiers above the class base without a T4 rule
   ceiling_without_critical: T3
 
-code_first:                  # opt in: the code can raise a change, see docs/CODE_FIRST_ROUTING.md
-  enabled: false
+code_first:                  # always on: the code can raise a change, see docs/CODE_FIRST_ROUTING.md
   recent_commits: 5          # files from the last N commits strengthen a match
   min_confidence: 0.5        # location confidence needed to route from the code
   bands: [0.2, 0.4, 0.6]     # code score edges: T1 | T2 | T2H | T3
   tie_margin: 0.04           # near an edge, the keyword class breaks the tie
 
-predict:                     # opt in: Haiku predicts the change when routing is unsure
-  enabled: false
+predict:                     # always on: Haiku predicts the change when routing is unsure
   model: haiku
   effort: low
   timeout_s: 10              # hard limit (max 13); a late answer leaves routing as it was
@@ -566,8 +564,11 @@ a failure and routes one tier higher. Use `ccr feedback` when that inference is 
   - the opt-in LLM classification: `ccr explain --llm`, and `ccr run` unless you pass
     `--no-llm`. It runs haiku/low with no tools, no MCP and no session, and is only asked
     when rule confidence is below `llm.threshold`;
+  - the change prediction in the prompt hook: haiku/low with no tools and no MCP, only when
+    routing is unsure. It sends the prompt, the located file paths with their symbol names
+    and line spans (no source) and the uncommitted diff stat. Answers are cached in
+    `.ccr/local/predict-cache.json` without the prompt text;
   - the `ccr run` task itself.
-  Hooks never call a model.
 - Grammar downloads (tree-sitter-language-pack) are the only network access ccr itself
   makes.
 
