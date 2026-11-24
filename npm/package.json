@@ -1,6 +1,6 @@
 {
   "name": "claude-code-tier-router",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Route Claude Code tasks to the cheapest sufficient model and effort (npm launcher for the claude-code-router Python package)",
   "license": "MIT",
   "author": "Satya Prakash Tiwari",

@@ -5,7 +5,7 @@ import shutil
 import pytest
 from conftest import ROUTE_REPOS, git_commit_all
 
-from ccr.config import default_config, load_config
+from ccr.config import TIERS, default_config, load_config
 from ccr.evaluate.locate import locate
 from ccr.evaluate.workspace import snapshot
 from ccr.graph import Graph, update
@@ -14,18 +14,22 @@ from ccr.route.budget import Budget
 from ccr.route.code import code_tier
 
 
-def _cfg(on=True, **extra):
+def _cfg(**extra):
     cfg = default_config()
-    cfg.data["code_first"]["enabled"] = on
     cfg.data["code_first"].update(extra)
     return cfg
+
+
+def _kw(d) -> str:
+    """The tier the keyword route gave, before the code could raise it."""
+    return d.code["keyword_tier"]
 
 
 def _decide(root, task, cfg, memory=None):
     g = Graph.open(root)
     try:
         return decide(task, root, cfg=cfg, graph=g, memory=memory, budget=Budget(),
-                      history_records=[])
+                      history_records=[], allow_predict=False)
     finally:
         if g is not None:
             g.close()
@@ -43,23 +47,26 @@ def shop(tmp_path):
 
 # --------------------------------------------------------------------------- config
 
-def test_off_by_default():
-    assert default_config()["code_first"]["enabled"] is False
+def test_always_on_and_old_opt_in_is_ignored(tmp_path):
+    assert "enabled" not in default_config()["code_first"]
+    (tmp_path / ".ccr").mkdir()
+    (tmp_path / ".ccr" / "config.yaml").write_text("code_first:\n  enabled: false\n")
+    cfg = load_config(tmp_path)
+    assert not cfg.errors and "enabled" not in cfg["code_first"]
+    assert any("code_first.enabled: ignored" in w for w in cfg.warnings)
 
 
 def test_config_validates_code_first(tmp_path):
     (tmp_path / ".ccr").mkdir()
     (tmp_path / ".ccr" / "config.yaml").write_text(
-        "code_first:\n  enabled: true\n  recent_commits: 3\n  bands: [0.1, 0.3, 0.5]\n")
+        "code_first:\n  recent_commits: 3\n  bands: [0.1, 0.3, 0.5]\n")
     cfg = load_config(tmp_path)
     assert not cfg.errors
-    assert cfg["code_first"]["enabled"] is True
     assert cfg["code_first"]["recent_commits"] == 3
     assert cfg["code_first"]["bands"] == [0.1, 0.3, 0.5]
 
 
 @pytest.mark.parametrize("body,needle", [
-    ("enabled: yes-please", "code_first.enabled"),
     ("bands: [0.5, 0.3, 0.6]", "code_first.bands"),
     ("bands: [0.2, 0.4]", "code_first.bands"),
     ("min_confidence: 2", "code_first.min_confidence"),
@@ -122,14 +129,6 @@ def test_edit_strengthens_a_matched_file(shop):
 
 # --------------------------------------------------------------------------- routing
 
-def test_code_first_off_matches_keyword_routing(route_env):
-    root, mem = route_env["shop_py"]
-    task = "Add a CSV export option to app/reports/export.py"
-    a = _decide(root, task, default_config(), mem)
-    b = _decide(root, task, _cfg(False), mem)
-    assert a.tier.name == b.tier.name and a.reasons == b.reasons and b.code is None
-
-
 @pytest.mark.parametrize("task,tier", [
     # the code raises a real change by one tier when it scores above the keyword route
     ("Fix the bug where formatPrice shows NaN for zero amounts", "T2"),
@@ -137,10 +136,9 @@ def test_code_first_off_matches_keyword_routing(route_env):
 ])
 def test_code_raises_a_real_change(route_env, task, tier):
     root, mem = route_env["web_ts"]
-    off = _decide(root, task, default_config(), mem)
     d = _decide(root, task, _cfg(), mem)
     assert d.code["applies"], d.reasons
-    assert d.tier.name == tier and d.tier.index == off.tier.index + 1, d.reasons
+    assert d.tier.name == tier and d.tier.index == TIERS.index(_kw(d)) + 1, d.reasons
     assert any(r.startswith("code-first: code score") and "+1" in r for r in d.reasons)
 
 
@@ -152,8 +150,9 @@ def test_code_raises_a_real_change(route_env, task, tier):
 ])
 def test_code_never_lowers_or_double_counts(route_env, task):
     root, mem = route_env["shop_py"]
-    assert _decide(root, task, _cfg(), mem).tier.name == \
-        _decide(root, task, default_config(), mem).tier.name
+    d = _decide(root, task, _cfg(), mem)
+    assert TIERS.index(d.tier.name) <= max(TIERS.index(_kw(d)), TIERS.index("T4") * bool(d.t4_rules))
+    assert not any("+1 ->" in r for r in d.reasons if r.startswith("code-first")), d.reasons
 
 
 @pytest.mark.parametrize("task,why", [
@@ -164,9 +163,8 @@ def test_code_never_lowers_or_double_counts(route_env, task):
 def test_falls_back_to_keywords(route_env, task, why):
     root, mem = route_env["shop_py"]
     d = _decide(root, task, _cfg(), mem)
-    off = _decide(root, task, default_config(), mem)
     assert not d.code["applies"] and why in d.code["fallback"]
-    assert d.tier.name == off.tier.name
+    assert d.tier.name == _kw(d)
     assert any(r.startswith("code-first: keyword tier kept") for r in d.reasons)
 
 
@@ -261,9 +259,8 @@ def self_repo(tmp_path_factory):
 
 @pytest.mark.parametrize("task", PROBE)
 def test_probe_prompts_keep_their_keyword_tier(self_repo, task):
-    off = _decide(self_repo, task, default_config())
     on = _decide(self_repo, task, _cfg())
-    assert on.tier.name == off.tier.name, on.reasons
+    assert on.tier.name == _kw(on), on.reasons
 
 
 @pytest.mark.parametrize("task", PROBE[:5])

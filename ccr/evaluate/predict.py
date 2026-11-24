@@ -255,6 +255,9 @@ def predict(task: str, root, graph, located: list[str], *, workspace=None, cfg=N
             runner=None) -> tuple[Prediction | None, str]:
     """(prediction or None, status). Never raises."""
     from ccr.evaluate import llm as L
+    import os
+    if runner is None and os.environ.get("CCR_NO_PREDICT"):   # test suites: never reach Haiku
+        return None, "unavailable: CCR_NO_PREDICT is set"
     root = Path(root)
     pc = cfg["predict"] if cfg is not None else {"model": "haiku", "effort": "low",
                                                  "timeout_s": 10.0}
@@ -265,6 +268,8 @@ def predict(task: str, root, graph, located: list[str], *, workspace=None, cfg=N
         head = out.strip() if out else None
     except Exception:
         pass
+    if float(pc["timeout_s"]) < 1.0:
+        return None, "skipped: no time left inside the hook's timeout"
     key = cache_key(task, located, workspace, head)
     hit = cache_get(root, key)
     if hit is not None:

@@ -120,24 +120,23 @@ DEFAULTS: dict = {
                                      # only when 3+ independent signals agree)
         "ceiling_without_critical": "T3",
     },
-    # Code-first routing (opt in): find the files from the real repository state (uncommitted
+    # Code-first routing (always on): find the files from the real repository state (uncommitted
     # edits, recent commits, named paths and symbols) and score that code. The score can raise
     # a real code change one tier above its keyword route; it never lowers a tier or moves
     # trivial edits and questions, and steps or small-scope words still win.
     # See docs/CODE_FIRST_ROUTING.md.
     "code_first": {
-        "enabled": False,
         "recent_commits": 5,         # files from the last N commits strengthen a match
         "min_confidence": 0.5,       # location confidence needed to route from the code
         "bands": [0.2, 0.4, 0.6],    # code score edges: T1 | T2 | T2H | T3
         "tie_margin": 0.04,          # within this of an edge, the class base breaks the tie
     },
-    # Step 2 of code-first routing (opt in): when routing is unsure, ask Haiku (your claude
+    # Step 2 of code-first routing (always on): when routing is unsure, ask Haiku (your claude
     # CLI) to predict the change: files, size, interface or schema change. A small change
     # lowers the tier by one, a large one raises it by one; never past a T4 rule or below a
-    # critical path. Cached per prompt and repository state. See docs/CODE_FIRST_ROUTING.md.
+    # critical path. Cached per prompt and repository state. Without the claude CLI, or when it
+    # is late, routing silently keeps its rule-based tier. See docs/CODE_FIRST_ROUTING.md.
     "predict": {
-        "enabled": False,
         "model": "haiku",
         "effort": "low",
         "timeout_s": 10.0,           # hard limit; a late answer leaves routing as it was.
@@ -493,10 +492,8 @@ def _merge_code_first(cfg: Config, raw: dict) -> None:
     d = cfg.data["code_first"]
     for k, v in sec.items():
         if k == "enabled":
-            if isinstance(v, bool):
-                d[k] = v
-            else:
-                cfg.errors.append(f"code_first.enabled: expected true or false, got {v!r}")
+            # always on since 0.2.1; an old opt-in setting is ignored, not an error
+            cfg.warnings.append("code_first.enabled: ignored, code-first is always on")
         elif k == "recent_commits":
             if _num(cfg, "code_first.recent_commits", v, 0, 100):
                 d[k] = int(v)
@@ -527,10 +524,8 @@ def _merge_predict(cfg: Config, raw: dict) -> None:
     d = cfg.data["predict"]
     for k, v in sec.items():
         if k == "enabled":
-            if isinstance(v, bool):
-                d[k] = v
-            else:
-                cfg.errors.append(f"predict.enabled: expected true or false, got {v!r}")
+            # always on since 0.2.1; an old opt-in setting is ignored, not an error
+            cfg.warnings.append("predict.enabled: ignored, predict is always on")
         elif k == "model":
             if _valid_model(v):
                 d[k] = v

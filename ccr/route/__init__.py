@@ -139,11 +139,9 @@ def decide(task: str, root: str | Path = ".", *, cfg: Config | None = None,
     if memory is _AUTO:
         from ccr.memory import collect
         memory = collect(root, nested=nested_memory)
-    workspace = None
-    if cfg["code_first"]["enabled"]:
-        from ccr.evaluate.workspace import snapshot
-        workspace = snapshot(root, cfg["code_first"]["recent_commits"])
-        notes += workspace.notes
+    from ccr.evaluate.workspace import snapshot
+    workspace = snapshot(root, cfg["code_first"]["recent_commits"])
+    notes += workspace.notes
     try:
         loc = locate(task, root, graph, memory, workspace=workspace)
         tc = classify(task, located=loc.located, hard_terms=cfg["hard_terms"])
@@ -179,7 +177,7 @@ def decide(task: str, root: str | Path = ".", *, cfg: Config | None = None,
             from ccr import history as H
             history_records = H.read(root, window_days=cfg["history"]["window_days"], now=now)
         d = _route(tc, loc, risk, budget, history_records, cfg, conf, workspace)
-        if cfg["predict"]["enabled"] and allow_predict:
+        if allow_predict:
             why = _unsure(d, cfg)
             if why is None:
                 d.predict = {"asked": False, "status": "not needed: routing is sure"}
@@ -630,11 +628,9 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     _risk_note(kind, risk, ups, downs, reasons)
 
     keyword_tier = tier
-    code = None
-    if cfg["code_first"]["enabled"]:
-        from ccr.route.code import code_tier
-        code = code_tier(tc, loc, risk, cfg, workspace)
-        tier = _code_raise(tier, code, ups, downs, reasons)
+    from ccr.route.code import code_tier
+    code = code_tier(tc, loc, risk, cfg, workspace)
+    tier = _code_raise(tier, code, ups, downs, reasons)
     predict_used = False
     if prediction is not None:
         code_rose = any(u.startswith(_CODE_UP + _CRITICAL_UP) for u in ups)

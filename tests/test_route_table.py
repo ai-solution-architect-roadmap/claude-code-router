@@ -42,8 +42,10 @@ CASES = [
     ("shop_py", "please add a test for title_case with empty strings", "T1", "tests"),
     ("web_ts", "Change the primary button color to blue in src/components/Button.tsx", "T0",
      "trivial"),
-    ("web_ts", "Add an optional icon prop to the Button component", "T2", "feature"),
-    ("web_ts", "Fix the bug where formatPrice shows NaN for zero amounts", "T1", "bugfix"),
+    # code-first: 3 files and no tests lift this one tier above its keyword T2
+    ("web_ts", "Add an optional icon prop to the Button component", "T2H", "feature"),
+    # code-first: a helper imported across the app lifts the keyword T1 by one
+    ("web_ts", "Fix the bug where formatPrice shows NaN for zero amounts", "T2", "bugfix"),
     ("web_ts", "Refactor the checkout page to use the new api client and split it into "
                "smaller components", "T3", "refactor"),
     ("web_ts", "Migrate all class components to React hooks across the codebase", "T3",

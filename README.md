@@ -243,8 +243,9 @@ you add your own `critical_paths`, `critical_terms` and `hard_terms`.
 
 ## Privacy
 
-All routing decisions run locally. The only model call ccr makes on its own is an optional,
-opt-in classification by haiku through your own `claude` CLI. Local state lives in `.ccr/`.
+Routing runs locally. When the rules are unsure, the prompt hook asks haiku through your own
+`claude` CLI to predict the change, sending the prompt, file paths, symbol names and the diff
+stat (no source). Local state lives in `.ccr/`.
 
 ## Documentation
 

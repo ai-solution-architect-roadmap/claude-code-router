@@ -153,7 +153,7 @@ def _route(route_env, repo, task, budget):
     ("svc_go", "Add a /healthz endpoint to the router in internal/http/router.go", "T2", "T1"),
     ("shop_py", "Refactor Engine.run into smaller functions without changing behaviour", "T2H",
      "T2"),
-    ("web_ts", "Fix the bug where formatPrice shows NaN for zero amounts", "T1", "T0"),
+    ("web_ts", "Fix the bug where formatPrice shows NaN for zero amounts", "T2", "T1"),
     ("shop_py", "What does Engine.run do?", "T0", "T0"),                       # floor
     ("shop_py", "Fix the JWT signature verification vulnerability in app/auth/tokens.py",
      "T4", "T4"),                                                               # never T4

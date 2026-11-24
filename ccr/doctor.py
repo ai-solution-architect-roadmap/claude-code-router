@@ -42,6 +42,11 @@ def _doctor_settings(root: Path) -> list[tuple[str, str]]:
     if isinstance(hooks, dict) and hooks:
         if "ccr" in json.dumps(hooks):
             out.append(("OK", f"ccr hooks wired ({', '.join(hooks)})"))
+            from ccr.install.settings import installed_prompt_timeout
+            t = installed_prompt_timeout(root)
+            if t is not None and t < 15:
+                out.append(("WARN", f"prompt hook timeout is {t:.0f}s: too short for the Haiku "
+                                    "change prediction; re-run `ccr init` (sets 15s)"))
         else:
             out.append(("WARN", "hooks present but none call ccr"))
     else:

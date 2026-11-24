@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from ccr.config import default_config, load_config
+from ccr.config import TIERS, default_config, load_config
 from ccr.evaluate import llm as L
 from ccr.evaluate.predict import Prediction, cache_key, parse, verify_files
 from ccr.graph import Graph
@@ -12,10 +12,9 @@ from ccr.route import decide
 from ccr.route.budget import Budget
 
 
-def _cfg(predict=True, code=True):
+def _cfg(predict=True):
     cfg = default_config()
-    cfg.data["code_first"]["enabled"] = code
-    cfg.data["predict"]["enabled"] = predict
+    cfg.ask = predict            # read by _decide: allow_predict
     return cfg
 
 
@@ -34,7 +33,8 @@ def _decide(root, task, cfg, runner, mem=None):
     g = Graph.open(root)
     try:
         return decide(task, root, cfg=cfg, graph=g, memory=mem, budget=Budget(),
-                      history_records=[], predict_runner=runner)
+                      history_records=[], predict_runner=runner,
+                      allow_predict=getattr(cfg, "ask", True))
     finally:
         g.close()
 
@@ -89,22 +89,36 @@ def test_verify_drops_invented_files(tmp_path):
 def test_config_validates_predict(tmp_path):
     (tmp_path / ".ccr").mkdir()
     (tmp_path / ".ccr" / "config.yaml").write_text(
-        "predict:\n  enabled: true\n  timeout_s: 3\n  effort: turbo\n")
+        "predict:\n  enabled: false\n  timeout_s: 3\n  effort: turbo\n")
     cfg = load_config(tmp_path)
-    assert cfg["predict"]["enabled"] is True and cfg["predict"]["timeout_s"] == 3
+    assert cfg["predict"]["timeout_s"] == 3 and "enabled" not in cfg["predict"]
     assert any("predict.effort" in e for e in cfg.errors)
-    assert default_config()["predict"]["enabled"] is False
+    assert any("predict.enabled: ignored" in w for w in cfg.warnings)
+    assert "enabled" not in default_config()["predict"]
     assert default_config()["predict"]["timeout_s"] == 10.0
 
 
 # --------------------------------------------------------------------------- gating
 
-def test_off_by_default_never_calls(fresh):
+def test_always_on_by_default(fresh):
     root, mem = fresh["svc_go"]
     calls = []
     d = _decide(root, "Fix the data race in the LRU cache in internal/cache/cache.go",
                 default_config(), _runner(SMALL, calls), mem)
-    assert not calls and d.predict is None
+    assert len(calls) == 1 and d.predict["asked"]
+
+
+def test_missing_claude_cli_falls_back_silently(fresh, monkeypatch, tmp_path):
+    from ccr.evaluate import predict as P
+    monkeypatch.delenv("CCR_NO_PREDICT")
+    monkeypatch.setattr(L.shutil, "which", lambda _: None)
+    pr, status = P.predict.__wrapped__("fix it", tmp_path, None, ["a.py"], cfg=default_config())
+    assert pr is None and "not found" in status
+    root, mem = fresh["svc_go"]
+    task = "Fix the data race in the LRU cache in internal/cache/cache.go"
+    before = _decide(root, task, _cfg(predict=False), None, mem)
+    d = _decide(root, task, default_config(), _runner(L.LLMUnavailable("not found")), mem)
+    assert d.tier.name == before.tier.name and "size" not in d.predict
 
 
 @pytest.mark.parametrize("task", [
@@ -162,20 +176,18 @@ def test_large_change_raises_one_tier(fresh):
 def test_large_change_does_not_stack_on_a_code_raise(fresh):
     root, mem = fresh["web_ts"]
     task = "Add an optional icon prop to the Button component"
-    main = _decide(root, task, default_config(), None, mem)
     d = _decide(root, task, _cfg(), _runner(LARGE), mem)
-    assert d.tier.index == main.tier.index + 1, d.reasons
+    assert d.tier.index == TIERS.index(d.code["keyword_tier"]) + 1, d.reasons
 
 
 def test_small_prediction_cancels_a_code_raise(fresh):
     root, mem = fresh["web_ts"]
     task = "Fix the bug where formatPrice shows NaN for zero amounts"
-    main = _decide(root, task, default_config(), None, mem)
     code = _decide(root, task, _cfg(predict=False), None, mem)
     small = dict(SMALL, files=[{"path": "src/lib/format.ts", "confidence": 0.9}])
     d = _decide(root, task, _cfg(), _runner(small), mem)
-    assert code.tier.index == main.tier.index + 1
-    assert d.tier.name == main.tier.name, d.reasons
+    assert code.tier.index == TIERS.index(code.code["keyword_tier"]) + 1
+    assert d.tier.name == code.code["keyword_tier"], d.reasons
 
 
 def test_low_confidence_prediction_is_reported_not_used(fresh):
@@ -242,7 +254,7 @@ def test_hook_budget_makes_room_for_the_prediction(tmp_path):
     from ccr.hooks import _body
     (tmp_path / ".ccr").mkdir()
     (tmp_path / ".ccr" / "config.yaml").write_text(
-        "hooks:\n  route_prompts: false\npredict:\n  enabled: true\n  timeout_s: 5\n")
+        "hooks:\n  route_prompts: false\npredict:\n  timeout_s: 5\n")
     raw = json.dumps({"prompt": "hi", "cwd": str(tmp_path)}).encode()
     result = {}
     _body("prompt", raw, {"CLAUDE_PROJECT_DIR": str(tmp_path)}, result)
@@ -283,3 +295,44 @@ def test_predict_timeout_fits_the_hook_timeout(tmp_path):
     cfg = load_config(tmp_path)
     assert any("predict.timeout_s" in e for e in cfg.errors)
     assert HOOKS["UserPromptSubmit"][1] >= 13 + 1 + 1
+
+
+def _settings(root, timeout):
+    (root / ".claude").mkdir(exist_ok=True)
+    (root / ".claude" / "settings.json").write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": "ccr hook prompt", "timeout": timeout}]}]}}))
+
+
+def test_old_install_keeps_the_prediction_inside_its_hook_timeout(tmp_path):
+    from ccr.hooks import _body
+    from ccr.install.settings import installed_prompt_timeout
+    (tmp_path / ".ccr").mkdir()
+    (tmp_path / ".ccr" / "config.yaml").write_text("hooks:\n  route_prompts: false\n")
+    raw = json.dumps({"prompt": "hi", "cwd": str(tmp_path)}).encode()
+    _settings(tmp_path, 5)                      # installed before 0.2.1
+    assert installed_prompt_timeout(tmp_path) == 5.0
+    result = {}
+    _body("prompt", raw, {"CLAUDE_PROJECT_DIR": str(tmp_path)}, result)
+    assert result["budget"] == 4.0              # 3 s prediction + 1 s, under Claude Code's 5 s
+    _settings(tmp_path, 15)
+    result = {}
+    _body("prompt", raw, {"CLAUDE_PROJECT_DIR": str(tmp_path)}, result)
+    assert result["budget"] == 11.0
+
+
+def test_doctor_warns_about_a_short_prompt_hook_timeout(tmp_path):
+    from ccr.doctor import _doctor_settings
+    _settings(tmp_path, 5)
+    assert any(lvl == "WARN" and "ccr init" in msg for lvl, msg in _doctor_settings(tmp_path))
+    _settings(tmp_path, 15)
+    assert not any("timeout" in msg for _, msg in _doctor_settings(tmp_path))
+
+
+def test_no_time_left_skips_the_call(tmp_path):
+    from ccr.evaluate import predict as P
+    cfg = default_config()
+    cfg.data["predict"]["timeout_s"] = 0.5
+    calls = []
+    pr, status = P.predict.__wrapped__("fix it", tmp_path, None, ["a.py"], cfg=cfg,
+                                       runner=_runner(SMALL, calls))
+    assert pr is None and not calls and "skipped" in status
