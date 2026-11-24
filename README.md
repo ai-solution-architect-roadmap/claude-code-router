@@ -59,6 +59,8 @@ uv tool install claude-code-router
 pipx install claude-code-router
 # or
 pip install claude-code-router
+# or, with npm (installs the same Python package into ~/.ccr-npm on first run)
+npm install -g claude-code-tier-router
 
 ccr --help
 ```

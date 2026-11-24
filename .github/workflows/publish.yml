@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Publish to PyPI and npm
 
 on:
   release:
@@ -10,6 +10,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - name: Check the tag matches both package versions
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          py=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          npm=$(node -p "require('./npm/package.json').version")
+          echo "tag=$TAG pyproject=$py npm=$npm"
+          test "$TAG" = "v$py" && test "$py" = "$npm"
       - name: Build
         run: uv build
       - name: Check metadata
@@ -31,3 +39,27 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # The npm package is a launcher that installs the PyPI release, so it goes out after PyPI.
+  publish-npm:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write   # npm Trusted Publishing and provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Use an npm that supports Trusted Publishing
+        run: npm install -g npm@11
+      - name: Publish
+        working-directory: npm
+        # With Trusted Publishing set up on npmjs.com no token is needed; otherwise add an
+        # NPM_TOKEN secret to the "npm" environment.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
