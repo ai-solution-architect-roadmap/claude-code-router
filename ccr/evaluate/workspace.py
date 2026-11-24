@@ -1,5 +1,5 @@
 """What is changing in the working tree right now: uncommitted edits and recently committed
-files. Used by code-first routing (`code_first.enabled`) to find the files a prompt is about
+files. Used by code-first routing (always on) to find the files a prompt is about
 from the real repository state instead of from prompt words alone.
 
 Two or three short git calls, each with a tight timeout. Outside git, or when git is slow or

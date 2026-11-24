@@ -1,4 +1,4 @@
-"""Step 2 of code-first routing: the Haiku change prediction (`predict.enabled`). Haiku is
+"""Step 2 of code-first routing: the Haiku change prediction (always on). Haiku is
 always mocked here: every call goes through one runner."""
 import json
 

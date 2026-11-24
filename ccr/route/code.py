@@ -1,6 +1,6 @@
 """Code-first tier: a score of the code a task touches, which can raise a real code change
-by one tier above its keyword route (ccr/route/__init__.py `_code_raise`). Enabled with
-`code_first.enabled` (see docs/CODE_FIRST_ROUTING.md).
+by one tier above its keyword route (ccr/route/__init__.py `_code_raise`). Always on since
+0.2.1 (see docs/CODE_FIRST_ROUTING.md).
 
 Score components, each in [0, 1] (noisy-or, so one strong factor is enough and several
 moderate ones add up):
