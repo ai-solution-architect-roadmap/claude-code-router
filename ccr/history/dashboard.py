@@ -174,7 +174,7 @@ const money=v=>'$'+(v>=100?v.toFixed(0):v.toFixed(2));
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmtT=t=>new Date(t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 const tip=$('#tip');
-function showTip(e,html){tip.innerHTML=html;tip.style.opacity=1;const x=Math.min(e.clientX+14,innerWidth-270);tip.style.left=x+'px';tip.style.top=(e.clientY+14)+'px'}
+function showTip(e,html){tip.innerHTML=html;tip.style.opacity=1;const x=Math.max(8,Math.min(e.clientX+14,innerWidth-270));tip.style.left=x+'px';tip.style.top=(e.clientY+14)+'px'}
 function hideTip(){tip.style.opacity=0}
 function el(n,a,p){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e}
 function txt(p,x,y,s,a){const t=el('text',Object.assign({x,y},a||{}),p);t.textContent=s;return t}
@@ -270,14 +270,14 @@ function heat(){
  cls.forEach((c,i)=>{txt(s,L-8,42+rh*i+17,c,{'text-anchor':'end'});
   ts.forEach((t,j)=>{const v=cnt[c+'|'+t]||0;
    const r=el('rect',{x:L+cw*j+1,y:38+rh*i+1,width:cw-2,height:rh-2,rx:4,fill:v?'var(--c1)':'var(--line)','fill-opacity':v?.18+.82*v/mx:.35},s);
-   if(v){txt(s,L+cw*j+cw/2,38+rh*i+18,v,{'text-anchor':'middle',style:'fill:var(--ink);font-weight:600'});hover(r,'<b>'+c+' at '+t+'</b><br>'+v+' task(s)')}})});
+   if(v){txt(s,L+cw*j+cw/2,38+rh*i+18,v,{'text-anchor':'middle',style:'fill:var(--ink);font-weight:600'});hover(r,'<b>'+esc(c)+' at '+esc(t)+'</b><br>'+v+' task(s)')}})});
  mount('#heat',s)}
 
 function health(){
  const mis=D.misroutes||{},L=D.learning||[];let h='';
  if(mis.decided){h+='<div class="sub">Over-routed '+mis.over+'/'+mis.decided+' ('+pct(mis.over_rate)+') · Under-routed '+mis.under+'/'+mis.decided+' ('+pct(mis.under_rate)+')</div>';
   if(mis.suggestions&&mis.suggestions.length)h+='<ul class="tune">'+mis.suggestions.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>';
-  if(mis.items&&mis.items.length)h+='<table style="margin-top:10px"><tr><th>Task</th><th>Kind</th><th>Tier</th><th>Class</th><th>Area</th><th>Why</th></tr>'+mis.items.slice(0,15).map(i=>'<tr><td>'+esc(String(i.id||'').slice(0,8))+'</td><td>'+i.kind+'</td><td>'+i.tier+' <span class="sub">'+esc((D.tier_models[i.tier]||'').replace('/',' '))+'</span></td><td>'+esc(i.class)+'</td><td>'+esc(i.area||'*')+'</td><td>'+esc(i.why)+'</td></tr>').join('')+'</table>'+(mis.items.length>15?'<div class="note">Showing 15 of '+mis.items.length+'. Run <code>ccr stats --misroutes</code> for the full list.</div>':'');
+  if(mis.items&&mis.items.length)h+='<table style="margin-top:10px"><tr><th>Task</th><th>Kind</th><th>Tier</th><th>Class</th><th>Area</th><th>Why</th></tr>'+mis.items.slice(0,15).map(i=>'<tr><td>'+esc(String(i.id||'').slice(0,8))+'</td><td>'+esc(i.kind)+'</td><td>'+esc(i.tier)+' <span class="sub">'+esc((D.tier_models[i.tier]||'').replace('/',' '))+'</span></td><td>'+esc(i.class)+'</td><td>'+esc(i.area||'*')+'</td><td>'+esc(i.why)+'</td></tr>').join('')+'</table>'+(mis.items.length>15?'<div class="note">Showing 15 of '+mis.items.length+'. Run <code>ccr stats --misroutes</code> for the full list.</div>':'');
  }else h+='<div class="sub">No decided tasks yet, so misroutes cannot be measured.</div>';
  if(D.manual_escalations||D.possible_reworks)h+='<div class="sub" style="margin-top:6px">'+D.manual_escalations+' manual move(s) to a stronger model and '+D.possible_reworks+' possible rework(s) after a cheap answer, counted against the tier they came from.</div>';
  const sh=D.shadow||{n:0};
@@ -316,6 +316,7 @@ function steps(r){
  if(t.budget_pressure)s.push('Weekly budget pressure lowered the tier.');
  if(r.escalated_to)s.push('It failed here and was retried at '+esc(r.escalated_to)+'.');
  s.push('Final: <b>'+esc(r.tier)+'</b>.');return s}
+function safeSteps(r){try{return steps(r)}catch(e){return ['Decision details could not be read for this task.']}}
 const ARROW={up:'↑ ',down:'↓ ',rule:'⚑ ',none:'= '};
 function why(r){
  const w=r.why;if(!w||!w.checks.length)return '<div class="sub">No decision details were recorded for this task.</div>';
@@ -331,7 +332,7 @@ function card(r){
   '<span class="'+cls+'">'+lab+(r.escalated_to?' → '+r.escalated_to:'')+'</span><span class="sub hide-s">'+fk(r.tokens||0)+'</span></summary>';
  const body='<div class="body"><h3>Prompt</h3>'+(pr?'<pre class="pt">'+esc(pr)+'</pre>':'<div class="sub">Not stored. Set <code>hooks.store_prompts: true</code> in <code>.ccr/config.yaml</code> to keep prompts for new tasks.</div>')+
   '<h3>What ccr checked before choosing '+r.tier+' ('+esc(D.tier_models[r.tier]||'')+')</h3>'+why(r)+
-  '<details class="raw"><summary>Raw engine notes</summary><ol class="steps">'+steps(r).map(x=>'<li>'+x+'</li>').join('')+'</ol></details>'+
+  '<details class="raw"><summary>Raw engine notes</summary><ol class="steps">'+safeSteps(r).map(x=>'<li>'+x+'</li>').join('')+'</ol></details>'+
   '<h3>Details</h3><div class="kv"><span>ID <b>'+esc(r.full_id.slice(0,12))+'</b></span><span>Class <b>'+esc(r.class||'?')+'</b></span><span>Area <b>'+esc(r.area||'*')+'</b></span><span>Model <b>'+esc(D.tier_models[r.tier]||'')+'</b></span><span>Tokens <b>'+fk(r.tokens||0)+'</b></span><span>Source <b>'+esc(r.source||'')+'</b></span>'+(r.confidence!=null?'<span>Confidence <b>'+Number(r.confidence).toFixed(2)+'</b></span>':'')+'</div></div>';
  return '<details class="dec">'+sum+body+'</details>'}
 function tasks(reset){
@@ -353,13 +354,13 @@ $('#ftier').innerHTML+=D.tier_order.map(t=>'<option value="'+t+'">'+t+' · '+D.t
 $('#prev').onclick=()=>{page--;tasks()};$('#next').onclick=()=>{page++;tasks()};
 $('#theme').onclick=()=>{const r=document.documentElement,dark=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme:dark)').matches;r.dataset.theme=dark?'light':'dark'};
 function secs(){return [...document.querySelectorAll('section.card')]}
-function secKey(c){return c.querySelector('h2').textContent.trim()}
+function secKey(c){const h=c.querySelector('h2');return h.dataset.key||h.textContent.trim()}
 function loadClosed(){try{return JSON.parse(localStorage.getItem('ccr-closed')||'[]')}catch(e){return []}}
 function saveClosed(){try{localStorage.setItem('ccr-closed',JSON.stringify(secs().filter(c=>c.classList.contains('closed')).map(secKey)))}catch(e){}}
 function setOpen(c,open){c.classList.toggle('closed',!open);c.querySelector('h2').setAttribute('aria-expanded',open)}
 (function initSections(){
  const closed=loadClosed();
- secs().forEach(c=>{const h=c.querySelector('h2');if(!h)return;h.classList.add('sec');h.setAttribute('role','button');h.tabIndex=0;
+ secs().forEach(c=>{const h=c.querySelector('h2');if(!h)return;h.dataset.key=h.textContent.trim();h.classList.add('sec');h.setAttribute('role','button');h.tabIndex=0;
   const body=document.createElement('div');body.className='sec-body';
   while(h.nextSibling)body.appendChild(h.nextSibling);c.appendChild(body);
   setOpen(c,!closed.includes(secKey(c)));
