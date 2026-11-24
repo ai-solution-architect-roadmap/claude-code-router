@@ -114,9 +114,25 @@ Routing also handles a few cases that need more than cue words:
 
 - **Design class.** Requests for a plan, strategy or architecture ("design a plan for
   multi-currency support", "how would you structure ...") start at T3 (`class_base.design`).
-- **Bug reports that name no code.** A short bug report ccr cannot tie to any file ("it
-  crashes", "the weekly report is wrong") is routed as `debugging` (T3) because the work is
-  finding the problem. A retry phrase such as "still failing" is not treated this way.
+- **Bug reports that name no code.** A bug report ccr cannot tie to any file is routed as
+  `debugging` (T3) only when it has the marks of a hard bug ("it sometimes crashes", "flaky",
+  "race"), because the work is finding the problem. A plain "the app crashes" stays a bugfix
+  and the vague-bug signal lifts it one tier (T2). A retry phrase such as "still failing" is
+  not treated this way.
+- **Words that depend on context.**
+  - "update/upgrade X to 1.2" is a dependency bump (T0), like "bump". Frameworks, runtimes,
+    databases and major versions ("upgrade django to 4.2", "upgrade react to 18") stay
+    migrations.
+  - "error" before "message", "handling" or "text" is not a bug, and "typo" wins over bug
+    words.
+  - "add a column to the dashboard table" is UI work unless database words (schema,
+    migration, nullable, index, SQL, ...) appear.
+  - "rate limit" is security only on an auth, login or API surface.
+  - "why ...?" is a question unless it names a failure (crash, fail, error, flaky, ...).
+  - "remove the unused variable/function" is a trivial cleanup.
+- **Critical paths come from the files you name.** When the prompt names files, another file
+  counts as a critical path only when the router matched it strongly (0.8 or more), so "the
+  unused session variable in stop.py" does not pull in `session_start.py`.
 - **Destroying production data.** "delete all ... from the production database", "truncate
   the audit table in prod" and "wipe the users table on prod" go to T4 whatever class they
   were given. A question about the same thing does not.
@@ -136,8 +152,10 @@ How a tier is picked (every number is in the config):
    path, or a memory flag (critical, protected, fragile). **+2** when three or more of these
    agree. The push-up is capped by `routing.max_escalation` (2). T2H is a half step: a
    single +1 from T2 lands on it, a +2 or a critical path jumps over it to T3.
-3. **-1** for a small scope or explicit step-by-step instructions, but never on a critical
-   path, and never below T1 for code changes.
+3. **-1** for a small scope or explicit step-by-step instructions (numbered lines, or
+   "1. ... 2. ... 3. ..." on one line), but never on a critical path, and never below T1 for
+   code changes. Small-scope words ("just", "small") never cancel a +1 that came from the
+   code itself (complex code, high risk).
 Prompt length is not a signal. The code the task touches is.
 4. **Learning** from history (see [Feedback, stats and learning](#feedback-stats-and-learning)).
 5. Without a T4 rule the tier never exceeds **T3** (`routing.ceiling_without_critical`).

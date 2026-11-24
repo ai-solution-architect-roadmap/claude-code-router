@@ -238,6 +238,7 @@ def _impactful(risk: Risk) -> str | None:
 
 _NO_DOWN = {"migration", "security", "debugging"}
 _CRITICAL_UP = ("critical path", "memory flags")
+_CODE_UP = ("complex code", "risk high", "unclassified task on impactful code")
 _WORDING_UP = ("hard problem", "vague bug", "large scope")
 _SWEEPING_UP = "sweeping change"
 
@@ -358,12 +359,19 @@ def _escalate(tier: int, ups: list[str], max_esc: int, reasons: list[str]) -> in
     return new + 1 if crit and new == _HALF else new      # a critical path never stops at T2H
 
 
-def _descend(tier: int, downs: list[str], kind: str, critical_up: bool, reasons: list[str]) -> int:
+def _descend(tier: int, downs: list[str], kind: str, critical_up: bool, reasons: list[str],
+             code_floor: int = 0) -> int:
+    """Lower `tier` by one for wording that says the work is small. `code_floor`: the tier the
+    code's own risk asked for, which small-scope words ("just", "small") cannot cancel."""
     if not downs:
         return tier
     text = "; ".join(downs)
     if critical_up:
         reasons.append(f"{text}: ignored on a critical path")
+        return tier
+    if tier - 1 < code_floor and all(d.startswith("small scope") for d in downs):
+        # "just" or "small" is the user's guess at size; explicit steps still count
+        reasons.append(f"{text}: ignored, the code's risk sets the tier")
         return tier
     floor = 1 if kind in SUBSTANTIVE else 0
     if tier - 1 >= floor:
@@ -459,9 +467,12 @@ def _under_budget(tier: int, t4: list[str], risk: Risk, budget: Budget, reasons:
 
 
 def _unanchored_bug(tc: TaskClass, loc: Location) -> TaskClass:
-    """A bug report that names no code we can find says nothing about where or why: treat it
-    as a debugging task (exploration first) instead of a routine fix."""
-    if tc.kind == "bugfix" and tc.source == "rules" and not loc.located and not tc.steps:
+    """A bug report that names no code we can find and has the marks of a hard bug
+    (intermittent, sometimes, race, ...): treat it as a debugging task (exploration first)
+    instead of a routine fix. A plain "the app crashes" stays a bugfix; the vague-bug signal
+    still lifts it a tier."""
+    if tc.kind == "bugfix" and tc.source == "rules" and not loc.located and not tc.steps \
+            and tc.hard:
         both = tc.matched.get("bugfix", []) + tc.matched.get("debugging", [])
         return replace(tc, kind="debugging", matched={**tc.matched, "debugging": both})
     return tc
@@ -485,7 +496,8 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     ups, downs = _signals(tc, loc, risk)
     critical_up = any(u.startswith(_CRITICAL_UP) for u in ups)
     tier = _escalate(base, ups, max_esc, reasons)
-    tier = _descend(tier, downs, kind, critical_up, reasons)
+    code_floor = _climb(base, 1) if any(u.startswith(_CODE_UP) for u in ups) else 0
+    tier = _descend(tier, downs, kind, critical_up, reasons, code_floor)
     _risk_note(kind, risk, ups, downs, reasons)
 
     # history (learning loop, ccr/history/learn.py)

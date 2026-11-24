@@ -64,7 +64,8 @@ CASES = [
     ("svc_go", "Add a unit test for store.Get when the key is missing", "T1", "tests"),
     ("svc_go", "Bump the Go version in go.mod to 1.22", "T0", "trivial"),
     ("svc_go", "Find out why memory usage keeps growing in the server", "T3", "debugging"),
-    ("svc_go", "something is broken, fix it", "T3", "debugging"),   # names no code: explore first
+    # names no code but has no sign of a hard bug: a vague bugfix, lifted one tier
+    ("svc_go", "something is broken, fix it", "T2", "bugfix"),
     ("svc_go", "Do a security review of the whole codebase for injection and XSS issues", "T3",
      "security"),
     ("java", "Rename Helper to StringHelper everywhere", "T1", "trivial"),

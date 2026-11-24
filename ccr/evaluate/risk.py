@@ -31,6 +31,8 @@ MEMORY_KIND_VALUE = {"protected": 1.0, "critical": 0.9, "fragile": 0.6, "hard": 
                      "ownership": 0.3}
 PROMPT_CRITICAL_VALUE = 0.6
 CRITICAL_MIN_CONF = 0.45   # a weakly-located file (one directory word) is not a critical hit
+CRITICAL_GUESS_CONF = 0.8  # when the user names files, another file counts as critical only
+                           # when the router matched it this strongly (e.g. a named symbol)
 
 
 @dataclass
@@ -214,11 +216,15 @@ def _code_metrics(risk: Risk, prim, graph, rc: dict, best: _Best) -> None:
             best.items["blast_radius"] = (v, d + f"; {len(blast_union)} across all candidates", p)
 
 
-def _critical_paths(risk: Risk, prim, task: str, cfg, best: _Best) -> None:
+def _critical_paths(risk: Risk, prim, task: str, cfg, best: _Best,
+                    named: frozenset[str] = frozenset()) -> None:
     groups = cfg["critical_paths"]
+    # files the user named decide the critical path; a guess from a loose word in the prompt
+    # ("the unused session variable in stop.py" -> session_start.py) must not
+    min_conf = CRITICAL_GUESS_CONF if named else CRITICAL_MIN_CONF
     for c in prim:
         hit = critical_groups_for(c.path, groups)
-        if hit and c.confidence >= CRITICAL_MIN_CONF:
+        if hit and (c.path in named or c.confidence >= min_conf):
             risk.critical_files.append(c.path)
             for g in hit:
                 if g not in risk.critical_groups:
@@ -260,7 +266,8 @@ def assess_risk(location, task: str, cfg, graph=None, memory=None) -> Risk:
     best = _Best()
 
     _code_metrics(risk, prim, graph, rc, best)
-    _critical_paths(risk, prim, task, cfg, best)
+    _critical_paths(risk, prim, task, cfg, best,
+                    frozenset(getattr(location, "explicit", None) or ()))
     _memory_flags(risk, prim, memory, best)
 
     for n in COMPONENTS:

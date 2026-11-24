@@ -27,6 +27,8 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"tell\s+me|show\s+me|list|walk\s+me\s+through)\b", _I), 2.0),
         (re.compile(r"\?\s*$"), 1.5),
         (re.compile(r"^\s*(?:help|hi|hello|hey)\s*[!?.]*\s*$", _I), 4.0),
+        # "why does X ...?" asks for an explanation; debugging words decide otherwise
+        (re.compile(r"^\s*why\b[^?]*\?", _I), 2.0),
         (re.compile(r"\b(?:explain|describe|summari[sz]e|walk\s+me\s+through|overview\s+of|"
                     r"what\s+does|how\s+does|how\s+do(?:es)?\s+\w+\s+work|where\s+is|where\s+are|"
                     r"which\s+files?|find\s+where|look\s+up|understand|what\s+is|what\s+are|"
@@ -37,7 +39,9 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"docstrings?|readme|changelog|whitespace|indent\w*|formatting|reformat|"
                     r"lint(?:ing)?|bump|version\s+number|copy\s?text|label|colou?r|"
                     r"log\s+message|sort\s+imports|import\s+order|unused\s+imports?|"
-                    r"dead\s+code|one[- ]liner|license\s+header|todo)\b", _I), 2.0),
+                    r"dead\s+code|one[- ]liner|license\s+header|todo|"
+                    r"unused\s+(?:[\w-]+\s+){0,2}?(?:variables?|functions?|methods?|parameters?|params?|arguments?|"
+                    r"args?|constants?|fields?|helpers?|classes|class|code|locals?))\b", _I), 2.0),
         (re.compile(r"\b(?:add|delete|remove|drop)\s+(?:a\s+|an\s+|the\s+)?(?:short\s+|trailing\s+|blank\s+)?"
                     r"(?:comments?|docstrings?|type\s+hints?|newlines?|blank\s+lines?|whitespace|"
                     r"license\s+header|commented[- ]out\s+code)\b|\bcommented[- ]out\b|"
@@ -52,7 +56,9 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
         (re.compile(r"\btest\s+coverage\b|\btest\s+cases?\b", _I), 2.0),
     ],
     "bugfix": [
-        (re.compile(r"\b(?:fix\w*|bugs?|broken|crash\w*|errors?|exceptions?|fails?|failing|"
+        (re.compile(r"\b(?:fix\w*|bugs?|broken|crash\w*|"
+                    r"(?:errors?|exceptions?)(?!\s+(?:messages?|handling|handlers?|texts?|strings?|"
+                    r"copy|labels?|wording|pages?|codes?|types?|classes|class))|fails?|failing|"
                     r"failure|incorrect\w*|wrong|regression|null|nil|nan|undefined|"
                     r"off[- ]by[- ]one|doesn'?t\s+work|not\s+working|traceback|panic\w*|"
                     r"segfault|returns?\s+(?:none|null|nil|wrong|empty)|double[- ]count\w*)\b",
@@ -88,7 +94,7 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"leak(?:s|ed|ing)?\s+(?:secrets?|credentials?|tokens?|keys?|pii)|"
                     r"audit|pen-?test\w*|threat\s+model)\b", _I), 3.0),
         (re.compile(r"\b(?:session\s+fixation|fixation|csrf|clickjack\w*|brute[- ]?force|"
-                    r"lock\s*down|access\s+control|authori[sz]\w*|rate[- ]limit\w*|"
+                    r"lock\s*down|access\s+control|authori[sz]\w*|"
                     r"tokens?\s+(?:never\s+)?expir\w*|admin\s+routes?|two[- ]factor|2fa|mfa)\b",
                     _I), 4.0),
         (re.compile(r"\b(?:auth\w*|permissions?|secrets?|credentials?|passwords?|encrypt\w*|"
@@ -107,7 +113,8 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
                     r"hangs?|hanging|leak(?:s|ing)?|memory\s+leak|heisenbug|"
                     r"can'?t\s+reproduce|non-?deterministic\w*|keeps?\s+(?:growing|crashing|"
                     r"failing))\b", _I), 3.0),
-        (re.compile(r"^\s*why\b", _I), 2.0),
+        # "why does X crash" stated as a problem, not asked as a question (see WHY_QUESTION)
+        (re.compile(r"^\s*why\b(?![^?]*\?)", _I), 2.0),
         # symptoms with no cause named: the work is finding out what is wrong
         (re.compile(r"\b(?:no\s+idea\s+why|(?:do\s?n'?t|not)\s+(?:know|sure)\s+why|at\s+random|"
                     r"random\s+\w+|now\s+and\s+then|at\s+times|(?:do(?:es)?n'?t|do(?:es)?\s+not)\s+add\s+up|"
@@ -128,6 +135,8 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
     ],
 }
 
+_SCHEMA_PLAIN = RULES["migration"][1][0]    # "add a ... column to ..." without the word migration
+
 # A leading imperative verb is the strongest single cue.
 LEAD_VERB = [
     (re.compile(r"^\s*(?:fix|repair|resolve|patch)\b", _I), "bugfix", 1.5),
@@ -144,6 +153,50 @@ LEAD_VERB = [
     (re.compile(r"^\s*(?:audit|harden|secure)\b", _I), "security", 1.5),
     (re.compile(r"^\s*(?:plan|design|architect)\b", _I), "design", 1.5),
 ]
+
+# Context rules: words whose meaning depends on the rest of the prompt.
+# "why does X ...?" is a question unless it names a failure.
+WHY_QUESTION = re.compile(r"^\s*why\b[^?]*\?", _I)
+BUG_WORDS = re.compile(
+    r"\b(?:crash\w*|fail\w*|errors?|exceptions?|broken|bugs?|flak(?:y|iness)|intermittent\w*|"
+    r"sometimes|randomly|occasional\w*|sporadic\w*|hangs?|hanging|leak\w*|race\s+conditions?|"
+    r"deadlock\w*|wrong|incorrect\w*|null|nan|undefined|traceback|panic\w*|segfault)\b", _I)
+# "fix the typo in the error message" is a typo fix, not a bug fix
+TYPO = re.compile(r"\b(?:typos?|spelling|misspell\w*)\b", _I)
+TYPO_BONUS = 2.0
+# rate limiting is security work on auth / API surfaces, ordinary feature work elsewhere
+RATE_LIMIT = re.compile(r"\brate[- ]?limit\w*", _I)
+AUTH_API = re.compile(
+    r"\b(?:auth\w*|log\s?ins?|logouts?|sign[- ]?(?:in|up|on)|passwords?|credentials?|tokens?|"
+    r"sessions?|otp|2fa|mfa|api|apis|endpoints?|routes?|brute[- ]?force|abuse)\b", _I)
+# "add a column to the dashboard table" is UI work unless database words say otherwise
+UI_CONTEXT = re.compile(
+    r"\b(?:dashboards?|pages?|screens?|views?|ui|ux|grids?|components?|frontend|front-end|html|"
+    r"csv|spreadsheets?|excel|reports?|widgets?|modals?|forms?|display\w*|render\w*|layouts?|"
+    r"sidebars?|panels?|charts?|markdown|output)\b", _I)
+DB_CONTEXT = re.compile(
+    r"\b(?:databases?|db|sql|postgres\w*|mysql|sqlite|schemas?|migrations?|nullable|"
+    r"not\s+null|foreign\s+keys?|primary\s+keys?|constraints?|alembic|prisma|orm|models?|"
+    r"alter|varchar|index(?:es)?|indices)\b", _I)
+# "update/upgrade X to 1.2" is a dependency bump; frameworks, runtimes, databases and major
+# versions ("to 5", "major") stay migrations
+MINOR_BUMP = re.compile(
+    r"^\s*(?P<verb>update|upgrade)\s+(?:the\s+)?(?P<what>(?:[\w.@/+-]+\s+){1,3}?)"
+    r"(?:(?:dependency|package|version)\s+)?(?:from\s+v?\d[\w.]*\s+)?to\s+v?\d+(?:\.\d+)+\b", _I)
+PLATFORM = re.compile(
+    r"\b(?:django|rails|react|angular|vue|next(?:\.?js)?|nuxt|svelte|spring|flask|fastapi|"
+    r"express|laravel|symfony|dotnet|\.net|python|node(?:\.?js)?|java|jdk|php|ruby|go|golang|"
+    r"rust|typescript|kotlin|swift|postgres\w*|mysql|mariadb|mongo\w*|redis|sqlite|"
+    r"elasticsearch|kafka|kubernetes|k8s|terraform|schema|database|db|major)\b", _I)
+
+
+def _as_bump(core: str) -> str:
+    """`core` with a plain "update/upgrade <dependency> to <x.y>" read as "bump ..."."""
+    m = MINOR_BUMP.search(core)
+    if not m or PLATFORM.search(core):
+        return core
+    return core[:m.start("verb")] + "bump" + core[m.end("verb"):]
+
 
 SWEEPING = re.compile(
     r"\b(?:everything|everywhere|the\s+whole\s+(?:thing|app|backend|frontend|stack|project)|"
@@ -193,9 +246,23 @@ def count_steps(text: str) -> int:
     """Number of explicit steps in the prompt (0 when it is not a step-by-step list)."""
     n = len(STEP_LINE.findall(text))
     if n < MIN_STEPS:
+        n = max(n, _inline_steps(text))
+    if n < MIN_STEPS:
         found = [w.lower() for w in STEP_WORDS.findall(text)]
         n = len(found) if found and found[0].startswith("first") else 0
     return n if n >= MIN_STEPS else 0
+
+
+INLINE_STEP = re.compile(r"(?:^|(?<=\s))\(?(\d{1,2})[.)]\s+(?=\S)")
+
+
+def _inline_steps(text: str) -> int:
+    """Length of a 1. 2. 3. ... run written on one line (consecutive numbers from 1)."""
+    n = 0
+    for m in INLINE_STEP.finditer(text):
+        if int(m.group(1)) == n + 1:
+            n += 1
+    return n
 
 
 @dataclass
@@ -249,13 +316,16 @@ def classify(task: str, located: bool | None = None,
     """Classify a task prompt. `located`: whether code was located (feeds vagueness).
     `hard_terms`: project words (config `hard_terms`) that count like "intermittent"."""
     raw = task.strip()
-    core = _POLITE.sub("", raw, count=1)
+    core = _as_bump(_POLITE.sub("", raw, count=1))
     body = T.strip_refs(core)
+    ui_table = bool(UI_CONTEXT.search(body)) and not DB_CONTEXT.search(body)
     scores: dict[str, float] = {}
     matched: dict[str, list[str]] = {}
     for kind, rules in RULES.items():
         s = 0.0
         for rx, weight in rules:
+            if rx is _SCHEMA_PLAIN and ui_table:
+                continue
             src = core if rx.pattern.startswith("^") or rx.pattern.startswith(r"\?") else body
             hits = _hits(rx, src)
             if hits:
@@ -284,6 +354,7 @@ def classify(task: str, located: bool | None = None,
     # "add/write tests" is a tests task, not a feature that happens to mention tests
     if scores.get("tests", 0) >= 3.0 and "feature" in scores:
         scores["feature"] = max(0.0, scores["feature"] - 2.5)
+    _context_rules(core, body, hard, scores, matched)
     # questions that also carry a strong change cue ("can you fix ...?") are change requests
     ranked = sorted(scores.items(), key=lambda kv: (-kv[1], _PRIORITY.index(kv[0])))
     if ranked:
@@ -308,6 +379,34 @@ def classify(task: str, located: bool | None = None,
                      vagueness=v, vague_terms=vterms, destructive=_hits(DESTRUCTIVE, body),
                      sweeping=_hits(SWEEPING, body), hard=hard,
                      words=len(raw.split()))
+
+
+def _bump(scores: dict, matched: dict, kind: str, by: float, term: str) -> None:
+    scores[kind] = scores.get(kind, 0.0) + by
+    if term not in matched.setdefault(kind, []):
+        matched[kind].append(term)
+
+
+def _context_rules(core: str, body: str, hard: list[str], scores: dict, matched: dict) -> None:
+    """Score adjustments for words whose meaning depends on the rest of the prompt."""
+    typo = _hits(TYPO, body)
+    if typo and "trivial" in scores:
+        _bump(scores, matched, "trivial", TYPO_BONUS, typo[0])
+    rate = _hits(RATE_LIMIT, body)
+    if rate:
+        on_auth_or_api = bool(AUTH_API.search(core))
+        _bump(scores, matched, "security" if on_auth_or_api else "feature",
+              4.0 if on_auth_or_api else 1.5, rate[0])
+    if WHY_QUESTION.search(core):
+        if hard or BUG_WORDS.search(body):
+            _bump(scores, matched, "debugging", 3.5, "why")
+            scores["question"] = scores.get("question", 0.0) - 3.5
+        else:
+            # a why-question without a failure: the symptom words are not a bug report
+            scores["debugging"] = scores.get("debugging", 0.0) - 3.0
+    for kind in [k for k, v in scores.items() if v <= 0]:
+        del scores[kind]
+        matched.pop(kind, None)
 
 
 # tie-break order: prefer the cheaper interpretation ("start low")
