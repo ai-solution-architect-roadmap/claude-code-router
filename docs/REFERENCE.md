@@ -169,6 +169,13 @@ Prompt length is not a signal. The code the task touches is.
 
 `ccr explain "<task>"` shows each step with its reasons and scores. It runs nothing.
 
+**Code-first routing (opt in).** With `code_first.enabled: true`, steps 1 to 3 are replaced
+by a score of the code itself when the files are known: your uncommitted edits and recent
+commits help find them, and the number of files, lines already changed, dependents,
+complexity, tests, churn, critical paths and memory flags set the tier. Keywords then only
+decide whether the task edits code, break ties near a band edge, and keep a floor one tier
+below the class base. See [Code-first routing](CODE_FIRST_ROUTING.md).
+
 ## Configuration reference (`.ccr/config.yaml`)
 
 `ccr init` creates a short config file and you commit it. Any key you leave out uses the
@@ -252,6 +259,13 @@ llm:                         # opt-in assist (`ccr explain --llm`, `ccr run`)
 routing:
   max_escalation: 2          # tiers above the class base without a T4 rule
   ceiling_without_critical: T3
+
+code_first:                  # opt in: tier from the code, see docs/CODE_FIRST_ROUTING.md
+  enabled: false
+  recent_commits: 5          # files from the last N commits strengthen a match
+  min_confidence: 0.5        # location confidence needed to route from the code
+  bands: [0.2, 0.4, 0.6]     # code score edges: T1 | T2 | T2H | T3
+  tie_margin: 0.04           # near an edge, the keyword class breaks the tie
 
 run:                         # headless `ccr run`
   test_command: null         # e.g. "pytest -q"; must exit 0 for success

@@ -51,6 +51,7 @@ class Decision:
     bumps: list[str] = field(default_factory=list)   # names of the +1 signals that fired
     elapsed_ms: float = 0.0
     reclassed: bool = False     # an unanchored bug report was routed as debugging
+    code: dict | None = None    # code-first routing details (None when it is off)
 
     def record(self) -> dict:
         """History fields for this decision (no prompt text)."""
@@ -72,7 +73,10 @@ class Decision:
                 "code_risk": r.code_risk, "critical": r.critical_groups,
                 "memory_flags": sorted({f.kind for f in r.memory_flags}),
                 "t4": bool(self.t4_rules), "budget_pressure": bool(self.budget.pressure),
-                "elapsed_ms": round(self.elapsed_ms, 1)}
+                "elapsed_ms": round(self.elapsed_ms, 1),
+                **({"code_first": bool(self.code.get("applies")),
+                    "code_score": self.code.get("score"), "code_parts": self.code.get("parts"),
+                    "code_lines": self.code.get("lines")} if self.code else {})}
 
     def to_dict(self) -> dict:
         tc, loc, r, b = self.task_class, self.location, self.risk, self.budget
@@ -100,6 +104,7 @@ class Decision:
                        "soft_limit_pct": b.soft_limit_pct, "detail": b.detail},
             "history": self.history, "llm": self.llm, "t4_rules": self.t4_rules,
             "area": self.area, "reasons": self.reasons, "notes": self.notes,
+            "code_first": self.code,
             "elapsed_ms": round(self.elapsed_ms, 1),
         }
 
@@ -127,8 +132,13 @@ def decide(task: str, root: str | Path = ".", *, cfg: Config | None = None,
     if memory is _AUTO:
         from ccr.memory import collect
         memory = collect(root, nested=nested_memory)
+    workspace = None
+    if cfg["code_first"]["enabled"]:
+        from ccr.evaluate.workspace import snapshot
+        workspace = snapshot(root, cfg["code_first"]["recent_commits"])
+        notes += workspace.notes
     try:
-        loc = locate(task, root, graph, memory)
+        loc = locate(task, root, graph, memory, workspace=workspace)
         tc = classify(task, located=loc.located, hard_terms=cfg["hard_terms"])
         risk = assess_risk(loc, task, cfg, graph, memory)
         conf = overall_confidence(tc, loc)
@@ -161,7 +171,7 @@ def decide(task: str, root: str | Path = ".", *, cfg: Config | None = None,
         if history_records is None:
             from ccr import history as H
             history_records = H.read(root, window_days=cfg["history"]["window_days"], now=now)
-        d = _route(tc, loc, risk, budget, history_records, cfg, conf)
+        d = _route(tc, loc, risk, budget, history_records, cfg, conf, workspace)
         d.llm, d.llm_used = llm_status, llm_used
         d.notes = notes + loc.notes + risk.notes
         d.elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -479,7 +489,7 @@ def _unanchored_bug(tc: TaskClass, loc: Location) -> TaskClass:
 
 
 def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: list[dict],
-           cfg: Config, conf: float) -> Decision:
+           cfg: Config, conf: float, workspace=None) -> Decision:
     reclassed = _unanchored_bug(tc, loc)
     note = ["bug report names no code ccr can find: treated as debugging (explore first)"] \
         if reclassed is not tc else []
@@ -495,10 +505,23 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
 
     ups, downs = _signals(tc, loc, risk)
     critical_up = any(u.startswith(_CRITICAL_UP) for u in ups)
-    tier = _escalate(base, ups, max_esc, reasons)
-    code_floor = _climb(base, 1) if any(u.startswith(_CODE_UP) for u in ups) else 0
-    tier = _descend(tier, downs, kind, critical_up, reasons, code_floor)
-    _risk_note(kind, risk, ups, downs, reasons)
+    code = None
+    if cfg["code_first"]["enabled"]:
+        from ccr.route.code import code_tier
+        code = code_tier(tc, loc, risk, cfg, workspace)
+    if code is not None and code.applies:
+        # the code sets the tier; wording signals are already covered by the score or only
+        # broke the tie inside code_tier. Critical paths still lift via the score and T4 rules.
+        reasons.append("code-first: " + "; ".join(code.reasons))
+        base_name, base = code.tier, TIERS.index(code.tier)
+        tier = base
+    else:
+        if code is not None:
+            reasons.append(f"code-first: fell back to keyword routing ({code.fallback})")
+        tier = _escalate(base, ups, max_esc, reasons)
+        code_floor = _climb(base, 1) if any(u.startswith(_CODE_UP) for u in ups) else 0
+        tier = _descend(tier, downs, kind, critical_up, reasons, code_floor)
+        _risk_note(kind, risk, ups, downs, reasons)
 
     # history (learning loop, ccr/history/learn.py)
     from ccr.history import learn
@@ -536,4 +559,5 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     return Decision(task_class=tc, location=loc, risk=risk, budget=budget, tier=t,
                     base=base_name, confidence=conf, reasons=reasons, t4_rules=t4,
                     history=learned.note, area=area,
-                    bumps=[u.split(" (")[0] for u in ups], reclassed=bool(note))
+                    bumps=[u.split(" (")[0] for u in ups], reclassed=bool(note),
+                    code=code.to_dict() if code is not None else None)

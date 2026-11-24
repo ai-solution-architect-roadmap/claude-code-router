@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+- Code-first routing behind `code_first.enabled` (off by default): uncommitted edits and
+  recent commits help locate the files, and a score of that code sets the tier, with keywords
+  only breaking ties. See `docs/CODE_FIRST_ROUTING.md`.
+
 ## [0.1.1] - 2026-10-17
 
 ### Added
