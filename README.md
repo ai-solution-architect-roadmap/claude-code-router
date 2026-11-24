@@ -60,7 +60,7 @@ pipx install claude-code-router
 # or
 pip install claude-code-router
 # or, with npm (installs the same Python package into ~/.ccr-npm on first run)
-npm install -g claude-code-tier-router
+npm install -g @satya-prakash/claude-code-router
 
 ccr --help
 ```
