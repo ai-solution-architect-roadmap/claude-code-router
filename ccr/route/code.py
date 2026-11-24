@@ -1,5 +1,6 @@
-"""Code-first tier: a score of the code a task touches decides the tier, the prompt's
-keywords only break ties. Enabled with `code_first.enabled` (see docs/CODE_FIRST_ROUTING.md).
+"""Code-first tier: a score of the code a task touches, which can raise a real code change
+by one tier above its keyword route (ccr/route/__init__.py `_code_raise`). Enabled with
+`code_first.enabled` (see docs/CODE_FIRST_ROUTING.md).
 
 Score components, each in [0, 1] (noisy-or, so one strong factor is enough and several
 moderate ones add up):
@@ -13,12 +14,11 @@ moderate ones add up):
   critical_path   |
   memory         /
 
-Blast radius is scaled by how far an edit of the task's kind reaches (REACH). The tier never
-drops more than one below the class's usual start, so a debugging hunt in a small file
-still gets room to think.
+Blast radius is scaled by how far an edit of the task's kind reaches (REACH). Trivial edits,
+questions and design requests are not scored: their wording decides.
 
-Bands (`code_first.bands`, three edges) map the score to T1 | T2 | T2H | T3; a trivial edit in
-the lowest band goes to T0. T4 still needs a T4 rule; history and budget still apply after.
+Bands (`code_first.bands`, three edges) map the score to T1 | T2 | T2H | T3; near an edge the
+class's usual starting tier breaks the tie. T4 still needs a T4 rule.
 """
 from __future__ import annotations
 
@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 
 from ccr.config import TIERS
 
-CODE_KINDS = {"trivial", "tests", "bugfix", "feature", "refactor", "perf", "migration",
+# trivial edits keep their keyword tier: a typo fix in a complex file is still a typo fix
+CODE_KINDS = {"tests", "bugfix", "feature", "refactor", "perf", "migration",
               "security", "debugging"}
 WEIGHTS = {"files": 0.5, "change_size": 0.4, "blast_radius": 0.6, "complexity": 0.5,
            "test_proximity": 0.25, "churn": 0.2, "critical_path": 0.75, "memory": 0.6}
@@ -98,7 +99,8 @@ def _band(s: float, bands: list[float]) -> int:
 def code_tier(tc, loc, risk, cfg, workspace=None) -> CodeTier:
     cf = cfg["code_first"]
     if tc.kind not in CODE_KINDS:
-        return CodeTier(False, fallback=f"{tc.kind} does not edit code")
+        return CodeTier(False, fallback=f"{tc.kind}: wording decides"
+                        if tc.kind == "trivial" else f"{tc.kind} does not edit code")
     if not loc.graph:
         return CodeTier(False, fallback="no code graph (run `ccr graph`)")
     if loc.confidence < cf["min_confidence"]:
@@ -125,15 +127,6 @@ def code_tier(tc, loc, risk, cfg, workspace=None) -> CodeTier:
                 idx = BAND_TIERS.index(side)
             break
     tier = BAND_TIERS[idx]
-    if tc.kind == "trivial" and idx == 0:
-        tier = "T0"      # a trivial edit on simple code
-    # the task type still says how much thinking the work needs before any edit (a debugging
-    # hunt, a migration): the code can lower it by one tier at most
-    floor = max(0, base_idx - 1)
-    if TIERS.index(tier) < floor:
-        reasons.append(f"floor {TIERS[floor]}: one below the {TIERS[base_idx]} start for "
-                       f"{tc.kind}")
-        tier = TIERS[floor]
     reasons.append(f"code tier {tier}")
     return CodeTier(True, tier=tier, score=s, parts=parts, files=touched[:8], lines=lines,
                     reasons=reasons)

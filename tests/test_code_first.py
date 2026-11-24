@@ -131,22 +131,34 @@ def test_code_first_off_matches_keyword_routing(route_env):
 
 
 @pytest.mark.parametrize("task,tier", [
-    ("Fix the typo in the docstring of slugify in app/utils/strings.py", "T0"),
-    ("Fix the off-by-one error in paginate() in app/api/pagination.py; the last page is "
-     "dropped", "T1"),
-    ("Refactor Engine.run into smaller functions without changing behaviour", "T3"),
-    ("Fix the bug where refunds in the payment ledger are double counted", "T4"),
+    # the code raises a real change by one tier when it scores above the keyword route
+    ("Fix the bug where formatPrice shows NaN for zero amounts", "T2"),
+    ("Add an optional icon prop to the Button component", "T2H"),
 ])
-def test_code_sets_the_tier(route_env, task, tier):
-    root, mem = route_env["shop_py"]
+def test_code_raises_a_real_change(route_env, task, tier):
+    root, mem = route_env["web_ts"]
+    off = _decide(root, task, default_config(), mem)
     d = _decide(root, task, _cfg(), mem)
     assert d.code["applies"], d.reasons
-    assert d.tier.name == tier, d.reasons
-    assert any(r.startswith("code-first: code score") for r in d.reasons)
+    assert d.tier.name == tier and d.tier.index == off.tier.index + 1, d.reasons
+    assert any(r.startswith("code-first: code score") and "+1" in r for r in d.reasons)
+
+
+@pytest.mark.parametrize("task", [
+    "Fix the typo in the docstring of slugify in app/utils/strings.py",
+    "Fix the off-by-one error in paginate() in app/api/pagination.py; the last page is dropped",
+    "Refactor Engine.run into smaller functions without changing behaviour",
+    "Fix the bug where refunds in the payment ledger are double counted",
+])
+def test_code_never_lowers_or_double_counts(route_env, task):
+    root, mem = route_env["shop_py"]
+    assert _decide(root, task, _cfg(), mem).tier.name == \
+        _decide(root, task, default_config(), mem).tier.name
 
 
 @pytest.mark.parametrize("task,why", [
     ("What does Engine.run do?", "does not edit code"),
+    ("Rename the variable `tmp` to `result` in title_case", "wording decides"),
     ("something is broken, fix it", "files not known"),
 ])
 def test_falls_back_to_keywords(route_env, task, why):
@@ -155,7 +167,7 @@ def test_falls_back_to_keywords(route_env, task, why):
     off = _decide(root, task, default_config(), mem)
     assert not d.code["applies"] and why in d.code["fallback"]
     assert d.tier.name == off.tier.name
-    assert any(r.startswith("code-first: fell back") for r in d.reasons)
+    assert any(r.startswith("code-first: keyword tier kept") for r in d.reasons)
 
 
 def test_falls_back_without_a_graph(tmp_path):
@@ -177,20 +189,13 @@ def test_a_large_change_in_progress_raises_the_tier(shop):
     assert busy.tier.index > clean.tier.index, (clean.reasons, busy.reasons)
 
 
-def test_class_floor_keeps_room_to_think(route_env):
-    root, mem = route_env["svc_go"]
-    d = _decide(root, "Find out why memory usage keeps growing in the server", _cfg(), mem)
-    assert d.task_class.kind == "debugging" and d.code["applies"]
-    assert d.tier.name == "T2H", d.reasons         # one below the T3 start, never lower
-
-
 def test_keywords_break_a_tie(route_env):
     root, mem = route_env["shop_py"]
     task = "Fix the off-by-one error in paginate() in app/api/pagination.py; the last page is dropped"
     d = _decide(root, task, _cfg(), mem)
     s = d.code["score"]
-    # an edge just under the score would put it in T2; bugfix starts at T1, so the tie goes
-    # to the lower side. Without the margin the code alone decides.
+    # an edge just under the score would put the code at T2 and raise the task; bugfix starts
+    # at T1, so the tie goes to the lower side. Without the margin the code raises it.
     edges = [round(s - 0.01, 3), 0.7, 0.9]
     tied = _decide(root, task, _cfg(bands=edges, tie_margin=0.05), mem)
     assert tied.tier.name == "T1", tied.reasons
@@ -214,3 +219,54 @@ def test_code_tier_ignores_non_edits(route_env):
     d = _decide(root, "What does Engine.run do?", _cfg(), mem)
     ct = code_tier(d.task_class, d.location, d.risk, _cfg())
     assert not ct.applies
+
+
+# --------------------------------------------------------------------------- probe regressions
+# Prompts that went up to T2H/T3 in the first version of code-first routing (small edits in
+# complex files, explicit steps, small-scope wording, code counted twice). Routed against a
+# copy of ccr's own source; code-first must leave each on its keyword tier.
+
+PROBE = [
+    "fix the typo in the error message in ccr/cli.py",
+    "add a comment explaining the stripe retry logic",
+    "remove the unused session variable in stop.py",
+    "rename decide to route_task",
+    "rename decide to route_task across the whole codebase",
+    "fix the null check in ccr/config.py",
+    "fix the missing null check in ccr/config.py",
+    "the null check in ccr/config.py is wrong, fix it",
+    "in ccr/cli.py: 1. add a --quiet flag 2. pass it to format_decision 3. update the help text",
+    "fix ccr/cli.py:\n1. add a --quiet flag\n2. pass it to format_decision\n3. update the help",
+    "improve the error handling in ccr/cli.py",
+    "add tests for decide()",
+    "just make a small fix to the budget rounding in ccr/route/budget.py",
+    "add pydantic validation to the config loader",
+    "use pydantic to validate the config in ccr/config.py",
+]
+
+
+@pytest.fixture(scope="module")
+def self_repo(tmp_path_factory):
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1]
+    root = tmp_path_factory.mktemp("self") / "ccr_repo"
+    shutil.copytree(src / "ccr", root / "ccr",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (root / "tests").mkdir()
+    shutil.copy(src / "tests" / "test_history.py", root / "tests" / "test_history.py")
+    git_commit_all(root)
+    update(root, workers=1, offline=True)
+    return root
+
+
+@pytest.mark.parametrize("task", PROBE)
+def test_probe_prompts_keep_their_keyword_tier(self_repo, task):
+    off = _decide(self_repo, task, default_config())
+    on = _decide(self_repo, task, _cfg())
+    assert on.tier.name == off.tier.name, on.reasons
+
+
+@pytest.mark.parametrize("task", PROBE[:5])
+def test_trivial_edits_are_not_scored(self_repo, task):
+    d = _decide(self_repo, task, _cfg())
+    assert d.task_class.kind == "trivial" and not d.code["applies"]

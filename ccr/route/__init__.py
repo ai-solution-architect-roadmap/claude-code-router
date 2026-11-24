@@ -488,6 +488,32 @@ def _unanchored_bug(tc: TaskClass, loc: Location) -> TaskClass:
     return tc
 
 
+def _code_raise(tier: int, code, ups: list[str], downs: list[str], reasons: list[str]) -> int:
+    """Code-first routing may raise a real code change by one tier when the code scores
+    above the keyword tier. It never lowers a tier, never moves trivial edits or questions,
+    never overrides steps or small-scope words, and does not count the code twice when the
+    keyword route already rose for complex, risky or critical code."""
+    if not code.applies:
+        reasons.append(f"code-first: keyword tier kept ({code.fallback})")
+        return tier
+    head = "code-first: " + "; ".join(code.reasons[:-1])
+    code_idx = TIERS.index(code.tier)
+    if code_idx <= tier:
+        reasons.append(f"{head}; code tier {code.tier} does not raise {TIERS[min(tier, TOP)]}")
+        return tier
+    if downs:
+        reasons.append(f"{head}; code tier {code.tier} not applied: the prompt asks for a "
+                       f"small or step-by-step change")
+        return tier
+    if any(u.startswith(_CODE_UP + _CRITICAL_UP) for u in ups):
+        reasons.append(f"{head}; code tier {code.tier} not applied: the keyword route already "
+                       f"rose for this code")
+        return tier
+    new = min(_climb(tier, 1), code_idx)
+    reasons.append(f"{head}; +1 -> {TIERS[new]} (code tier {code.tier})")
+    return new
+
+
 def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: list[dict],
            cfg: Config, conf: float, workspace=None) -> Decision:
     reclassed = _unanchored_bug(tc, loc)
@@ -505,23 +531,16 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
 
     ups, downs = _signals(tc, loc, risk)
     critical_up = any(u.startswith(_CRITICAL_UP) for u in ups)
+    tier = _escalate(base, ups, max_esc, reasons)
+    code_floor = _climb(base, 1) if any(u.startswith(_CODE_UP) for u in ups) else 0
+    tier = _descend(tier, downs, kind, critical_up, reasons, code_floor)
+    _risk_note(kind, risk, ups, downs, reasons)
+
     code = None
     if cfg["code_first"]["enabled"]:
         from ccr.route.code import code_tier
         code = code_tier(tc, loc, risk, cfg, workspace)
-    if code is not None and code.applies:
-        # the code sets the tier; wording signals are already covered by the score or only
-        # broke the tie inside code_tier. Critical paths still lift via the score and T4 rules.
-        reasons.append("code-first: " + "; ".join(code.reasons))
-        base_name, base = code.tier, TIERS.index(code.tier)
-        tier = base
-    else:
-        if code is not None:
-            reasons.append(f"code-first: fell back to keyword routing ({code.fallback})")
-        tier = _escalate(base, ups, max_esc, reasons)
-        code_floor = _climb(base, 1) if any(u.startswith(_CODE_UP) for u in ups) else 0
-        tier = _descend(tier, downs, kind, critical_up, reasons, code_floor)
-        _risk_note(kind, risk, ups, downs, reasons)
+        tier = _code_raise(tier, code, ups, downs, reasons)
 
     # history (learning loop, ccr/history/learn.py)
     from ccr.history import learn

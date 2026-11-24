@@ -82,44 +82,45 @@ timeout or a bad answer, step 3 runs on step 1 alone.
 | memory flags | 0.6 | CLAUDE.md and other memory |
 
 Bands (`code_first.bands`, default `[0.2, 0.4, 0.6]`) map the score to T1, T2, T2H or T3.
+Within `code_first.tie_margin` (0.04) of a band edge, the class's usual starting tier picks
+the side.
 
-What the prompt's wording still does:
+**How the code tier is used: it only raises real code changes.** Keyword routing runs first,
+unchanged. Then the code tier can lift the task by one tier, when all of these hold:
 
-- **Decides whether the task edits code.** Questions and design requests keep keyword routing.
-- **Says how far an edit reaches** until step 2 predicts it (`REACH`): a typo fix in a module
-  forty files import does not touch those forty files, a refactor may. Trivial and test work
-  count 0.3 of the blast radius, bug fixes, perf and debugging 0.6, features, refactors,
-  migrations and security work 1.0. Words like "everywhere" set it to 1.0.
-- **Breaks ties.** Within `code_first.tie_margin` (0.04) of a band edge, the class's usual
-  starting tier picks the side.
-- **Sets a floor one tier below the class's usual start**, so a debugging hunt in a small
-  file still gets T2H.
-- **T4 rules** (security on a critical path, destructive migrations, production wipes) are
-  unchanged.
+- the task is a real code change (tests, bugfix, feature, refactor, perf, migration,
+  security, debugging). Trivial edits, questions and design requests keep their keyword tier:
+  a typo fix in a complex file is still a typo fix;
+- the code tier is above the keyword tier;
+- the prompt has no explicit steps and no small-scope words ("just", "small"), which still
+  lower the tier as today;
+- the keyword route did not already rise for complex, risky or critical code, so the same
+  code is not counted twice.
 
-The wording signals of keyword routing (large scope, small scope, hard problem, vague bug,
-explicit steps) are not applied when the code decides. History, the T3 ceiling without a T4
-rule, and budget pressure apply after, as today.
+The tier never goes down because of the code. T4 rules, history, the T3 ceiling and budget
+pressure apply as today.
 
-**Fallback.** Keyword routing runs unchanged, with a "code-first: fell back" reason, when:
-the task does not edit code, there is no code graph, or location confidence is below
-`code_first.min_confidence` (0.5).
+`REACH` scales blast radius by how far an edit of the task's kind reaches until step 2
+predicts it: tests 0.3, bug fixes, perf and debugging 0.6, features, refactors, migrations
+and security 1.0, and 1.0 for any task whose wording says "everywhere".
 
-### What changes on the fixture repos
+**When the code is not used.** The keyword tier is kept, with a "code-first: keyword tier
+kept" reason, when the task is trivial or does not edit code, there is no code graph, or
+location confidence is below `code_first.min_confidence` (0.5).
 
-On the 39 table cases in `tests/test_route_table.py`, 9 move:
+### History of this rule
 
-| Task | Keywords | Code-first | Why |
-| --- | --- | --- | --- |
-| Refactor Engine.run into smaller functions | T2H | T3 | complexity .77, memory says legacy |
-| Fix the retry bug in the Stripe client | T2 | T3 | payments path, 4 files, no tests |
-| Add an optional icon prop to Button | T2 | T2H | 3 files, no tests, tie went down |
-| Fix formatPrice NaN for zero amounts | T1 | T2 | widely imported helper |
-| Small fix to Footer.tsx | T1 | T2 | no tests; "small" no longer lowers it |
-| Fix the data race in the LRU cache | T3 | T2H | one simple file; floor holds T2H |
-| Terraform: add an S3 bucket | T3 | T2H | critical path, otherwise one simple file |
-| Why does memory usage keep growing | T3 | T2H | floor holds T2H |
-| Rename Helper everywhere | T1 | T2 | "everywhere" counts every dependent |
+The first version let the code score set the tier outright. On a 48-prompt probe against
+ccr's own code it moved 15 tiers, and 11 of those got worse: "fix the typo in the error
+message in ccr/cli.py", "add a comment", "rename decide" went T0 to T2H, null-check fixes in
+`ccr/config.py` went to T3, and explicit steps stopped lowering the tier. Those prompts are
+now regression tests (`tests/test_code_first.py::PROBE`). The raise-only rule loses the two
+cases that improved ("fix the flaky test" dropping from T3 to T2H), which step 2 can revisit
+with a real change prediction.
+
+On the 39 fixture table cases, the raise-only rule moves 2 tiers, both up by one:
+"Fix the bug where formatPrice shows NaN for zero amounts" (T1 to T2, a widely imported
+helper) and "Add an optional icon prop to the Button component" (T2 to T2H, 3 files, no tests).
 
 ## Step 4: check the real change (next)
 
@@ -146,5 +147,5 @@ code_first:
   tie_margin: 0.04      # near an edge, the keyword class breaks the tie
 ```
 
-`ccr explain "<task>"` shows the code score, its top components and the tier it picked, or why
-it fell back.
+`ccr explain "<task>"` shows the code score, its top components and whether it raised the
+tier, or why the keyword tier was kept.

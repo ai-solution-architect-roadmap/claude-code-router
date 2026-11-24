@@ -121,16 +121,16 @@ DEFAULTS: dict = {
         "ceiling_without_critical": "T3",
     },
     # Code-first routing (opt in): find the files from the real repository state (uncommitted
-    # edits, recent commits, named paths and symbols) and set the tier from a score of that
-    # code. The prompt's keywords then only decide whether the task edits code and break ties
-    # near a band edge. Falls back to keyword-first routing when the files are not known.
+    # edits, recent commits, named paths and symbols) and score that code. The score can raise
+    # a real code change one tier above its keyword route; it never lowers a tier or moves
+    # trivial edits and questions, and steps or small-scope words still win.
     # See docs/CODE_FIRST_ROUTING.md.
     "code_first": {
         "enabled": False,
         "recent_commits": 5,         # files from the last N commits strengthen a match
         "min_confidence": 0.5,       # location confidence needed to route from the code
         "bands": [0.2, 0.4, 0.6],    # code score edges: T1 | T2 | T2H | T3
-        "tie_margin": 0.04,          # within this of an edge, the keyword class breaks the tie
+        "tie_margin": 0.04,          # within this of an edge, the class base breaks the tie
     },
     # `ccr run` (headless `claude -p`).
     "run": {

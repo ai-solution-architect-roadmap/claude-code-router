@@ -169,12 +169,11 @@ Prompt length is not a signal. The code the task touches is.
 
 `ccr explain "<task>"` shows each step with its reasons and scores. It runs nothing.
 
-**Code-first routing (opt in).** With `code_first.enabled: true`, steps 1 to 3 are replaced
-by a score of the code itself when the files are known: your uncommitted edits and recent
-commits help find them, and the number of files, lines already changed, dependents,
-complexity, tests, churn, critical paths and memory flags set the tier. Keywords then only
-decide whether the task edits code, break ties near a band edge, and keep a floor one tier
-below the class base. See [Code-first routing](CODE_FIRST_ROUTING.md).
+**Code-first routing (opt in).** With `code_first.enabled: true`, your uncommitted edits
+and recent commits also help find the files, and a score of that code (files, lines already
+changed, dependents, complexity, tests, churn, critical paths, memory flags) can raise a real
+code change by one tier above the steps above. It never lowers a tier, never moves trivial
+edits or questions, and steps or small-scope words still win. See [Code-first routing](CODE_FIRST_ROUTING.md).
 
 ## Configuration reference (`.ccr/config.yaml`)
 
@@ -260,7 +259,7 @@ routing:
   max_escalation: 2          # tiers above the class base without a T4 rule
   ceiling_without_critical: T3
 
-code_first:                  # opt in: tier from the code, see docs/CODE_FIRST_ROUTING.md
+code_first:                  # opt in: the code can raise a change, see docs/CODE_FIRST_ROUTING.md
   enabled: false
   recent_commits: 5          # files from the last N commits strengthen a match
   min_confidence: 0.5        # location confidence needed to route from the code
