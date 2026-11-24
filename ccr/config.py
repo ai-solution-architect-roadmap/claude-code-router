@@ -120,6 +120,31 @@ DEFAULTS: dict = {
                                      # only when 3+ independent signals agree)
         "ceiling_without_critical": "T3",
     },
+    # Code-first routing (opt in): find the files from the real repository state (uncommitted
+    # edits, recent commits, named paths and symbols) and score that code. The score can raise
+    # a real code change one tier above its keyword route; it never lowers a tier or moves
+    # trivial edits and questions, and steps or small-scope words still win.
+    # See docs/CODE_FIRST_ROUTING.md.
+    "code_first": {
+        "enabled": False,
+        "recent_commits": 5,         # files from the last N commits strengthen a match
+        "min_confidence": 0.5,       # location confidence needed to route from the code
+        "bands": [0.2, 0.4, 0.6],    # code score edges: T1 | T2 | T2H | T3
+        "tie_margin": 0.04,          # within this of an edge, the class base breaks the tie
+    },
+    # Step 2 of code-first routing (opt in): when routing is unsure, ask Haiku (your claude
+    # CLI) to predict the change: files, size, interface or schema change. A small change
+    # lowers the tier by one, a large one raises it by one; never past a T4 rule or below a
+    # critical path. Cached per prompt and repository state. See docs/CODE_FIRST_ROUTING.md.
+    "predict": {
+        "enabled": False,
+        "model": "haiku",
+        "effort": "low",
+        "timeout_s": 10.0,           # hard limit; a late answer leaves routing as it was.
+                                     # The claude CLI takes about 4-5 s per call
+        "min_confidence": 0.6,       # below this the prediction is reported, not used
+        "boundary": 0.08,            # code score this close to a band edge counts as unsure
+    },
     # `ccr run` (headless `claude -p`).
     "run": {
         "test_command": None,        # shell command that must pass for success, e.g. "pytest -q"
@@ -458,6 +483,74 @@ def _merge_routing(cfg: Config, raw: dict) -> None:
         cfg.errors.append("routing: expected a mapping")
 
 
+def _merge_code_first(cfg: Config, raw: dict) -> None:
+    sec = raw.get("code_first")
+    if sec is None:
+        return
+    if not isinstance(sec, dict):
+        cfg.errors.append("code_first: expected a mapping")
+        return
+    d = cfg.data["code_first"]
+    for k, v in sec.items():
+        if k == "enabled":
+            if isinstance(v, bool):
+                d[k] = v
+            else:
+                cfg.errors.append(f"code_first.enabled: expected true or false, got {v!r}")
+        elif k == "recent_commits":
+            if _num(cfg, "code_first.recent_commits", v, 0, 100):
+                d[k] = int(v)
+        elif k in ("min_confidence", "tie_margin"):
+            if _num(cfg, f"code_first.{k}", v, 0, 1):
+                d[k] = float(v)
+        elif k == "bands":
+            ok = (isinstance(v, list) and len(v) == 3
+                  and all(isinstance(x, (int, float)) and not isinstance(x, bool) and 0 < x < 1
+                          for x in v)
+                  and list(v) == sorted(v) and len(set(v)) == 3)
+            if ok:
+                d[k] = [float(x) for x in v]
+            else:
+                cfg.errors.append("code_first.bands: expected three rising numbers between "
+                                  f"0 and 1, got {v!r}")
+        else:
+            cfg.warnings.append(f"code_first.{k}: unknown field ignored")
+
+
+def _merge_predict(cfg: Config, raw: dict) -> None:
+    sec = raw.get("predict")
+    if sec is None:
+        return
+    if not isinstance(sec, dict):
+        cfg.errors.append("predict: expected a mapping")
+        return
+    d = cfg.data["predict"]
+    for k, v in sec.items():
+        if k == "enabled":
+            if isinstance(v, bool):
+                d[k] = v
+            else:
+                cfg.errors.append(f"predict.enabled: expected true or false, got {v!r}")
+        elif k == "model":
+            if _valid_model(v):
+                d[k] = v
+            else:
+                cfg.errors.append(f"predict.model: unknown model {v!r}")
+        elif k == "effort":
+            if v in EFFORTS:
+                d[k] = v
+            else:
+                cfg.errors.append(f"predict.effort: must be one of {'|'.join(EFFORTS)}, "
+                                  f"got {v!r}")
+        elif k in ("timeout_s", "min_confidence", "boundary"):
+            # the prompt hook's Claude Code timeout is 15 s (ccr/install/settings.py)
+            lo, hi = (0.5, 13) if k == "timeout_s" else (0, 1)
+            if _num(cfg, f"predict.{k}", v, lo, hi):
+                d[k] = float(v)
+        else:
+            cfg.warnings.append(f"predict.{k}: unknown field ignored")
+
+
 def _merge_hooks(cfg: Config, raw: dict) -> None:
     d = cfg.data
     hooks = raw.get("hooks")
@@ -483,7 +576,7 @@ def _merge_hooks(cfg: Config, raw: dict) -> None:
 # One validator per config section, run in this order; add a section by appending here.
 _MERGERS = (_merge_tiers, _merge_class_base, _merge_critical, _merge_hard_terms, _merge_pricing,
             _merge_risk, _merge_budget, _merge_history, _merge_run, _merge_llm, _merge_routing,
-            _merge_hooks)
+            _merge_code_first, _merge_predict, _merge_hooks)
 
 
 def _section(cfg: Config, raw: dict, name: str, ranges: dict[str, tuple[float, float]],

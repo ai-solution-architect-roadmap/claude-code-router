@@ -51,6 +51,9 @@ class Decision:
     bumps: list[str] = field(default_factory=list)   # names of the +1 signals that fired
     elapsed_ms: float = 0.0
     reclassed: bool = False     # an unanchored bug report was routed as debugging
+    predict_used: bool = False  # the change prediction moved the tier
+    code: dict | None = None    # code-first routing details (None when it is off)
+    predict: dict | None = None  # Haiku change prediction (None when off or not asked)
 
     def record(self) -> dict:
         """History fields for this decision (no prompt text)."""
@@ -72,7 +75,14 @@ class Decision:
                 "code_risk": r.code_risk, "critical": r.critical_groups,
                 "memory_flags": sorted({f.kind for f in r.memory_flags}),
                 "t4": bool(self.t4_rules), "budget_pressure": bool(self.budget.pressure),
-                "elapsed_ms": round(self.elapsed_ms, 1)}
+                "elapsed_ms": round(self.elapsed_ms, 1),
+                **({"code_first": bool(self.code.get("applies")),
+                    "code_score": self.code.get("score"), "code_parts": self.code.get("parts"),
+                    "code_lines": self.code.get("lines")} if self.code else {}),
+                **({"predict_size": self.predict.get("size"),
+                    "predict_conf": self.predict.get("confidence"),
+                    "predict_used": bool(self.predict.get("used"))}
+                   if self.predict and "size" in self.predict else {})}
 
     def to_dict(self) -> dict:
         tc, loc, r, b = self.task_class, self.location, self.risk, self.budget
@@ -100,6 +110,7 @@ class Decision:
                        "soft_limit_pct": b.soft_limit_pct, "detail": b.detail},
             "history": self.history, "llm": self.llm, "t4_rules": self.t4_rules,
             "area": self.area, "reasons": self.reasons, "notes": self.notes,
+            "code_first": self.code, "predict": self.predict,
             "elapsed_ms": round(self.elapsed_ms, 1),
         }
 
@@ -113,7 +124,8 @@ def decide(task: str, root: str | Path = ".", *, cfg: Config | None = None,
            allow_llm: bool = False, llm_runner=None, graph=_AUTO, memory=_AUTO,
            budget: Budget | None = None, history_records: list[dict] | None = None,
            now: float | None = None, transcript_path: str | None = None,
-           budget_fallback=None, nested_memory: bool = True) -> Decision:
+           budget_fallback=None, nested_memory: bool = True, allow_predict: bool = True,
+           predict_runner=None) -> Decision:
     """Evaluate and route a task. Token-free unless `allow_llm` and rule confidence is low."""
     t0 = time.perf_counter()
     root = Path(root).resolve()
@@ -127,8 +139,13 @@ def decide(task: str, root: str | Path = ".", *, cfg: Config | None = None,
     if memory is _AUTO:
         from ccr.memory import collect
         memory = collect(root, nested=nested_memory)
+    workspace = None
+    if cfg["code_first"]["enabled"]:
+        from ccr.evaluate.workspace import snapshot
+        workspace = snapshot(root, cfg["code_first"]["recent_commits"])
+        notes += workspace.notes
     try:
-        loc = locate(task, root, graph, memory)
+        loc = locate(task, root, graph, memory, workspace=workspace)
         tc = classify(task, located=loc.located, hard_terms=cfg["hard_terms"])
         risk = assess_risk(loc, task, cfg, graph, memory)
         conf = overall_confidence(tc, loc)
@@ -161,9 +178,26 @@ def decide(task: str, root: str | Path = ".", *, cfg: Config | None = None,
         if history_records is None:
             from ccr import history as H
             history_records = H.read(root, window_days=cfg["history"]["window_days"], now=now)
-        d = _route(tc, loc, risk, budget, history_records, cfg, conf)
+        d = _route(tc, loc, risk, budget, history_records, cfg, conf, workspace)
+        if cfg["predict"]["enabled"] and allow_predict:
+            why = _unsure(d, cfg)
+            if why is None:
+                d.predict = {"asked": False, "status": "not needed: routing is sure"}
+            else:
+                from ccr.evaluate.predict import predict
+                located = [c.path for c in loc.candidates if c.confidence >= 0.2][:5]
+                pr, status = predict(task, root, graph, located, workspace=workspace, cfg=cfg,
+                                     runner=predict_runner)
+                if pr is not None:
+                    d = _route(tc, loc, risk, budget, history_records, cfg, conf, workspace,
+                               prediction=pr)
+                    d.predict = {"asked": True, "why": why, "status": status,
+                                 "used": d.predict_used, **pr.to_dict()}
+                else:
+                    d.predict = {"asked": True, "why": why, "status": status}
+                    d.notes.append(f"change prediction {status}: routing unchanged")
         d.llm, d.llm_used = llm_status, llm_used
-        d.notes = notes + loc.notes + risk.notes
+        d.notes = notes + loc.notes + risk.notes + d.notes
         d.elapsed_ms = (time.perf_counter() - t0) * 1000
         return d
     finally:
@@ -478,8 +512,103 @@ def _unanchored_bug(tc: TaskClass, loc: Location) -> TaskClass:
     return tc
 
 
+def _code_raise(tier: int, code, ups: list[str], downs: list[str], reasons: list[str]) -> int:
+    """Code-first routing may raise a real code change by one tier when the code scores
+    above the keyword tier. It never lowers a tier, never moves trivial edits or questions,
+    never overrides steps or small-scope words, and does not count the code twice when the
+    keyword route already rose for complex, risky or critical code."""
+    code.keyword_tier = TIERS[min(tier, TOP)]
+    if not code.applies:
+        reasons.append(f"code-first: keyword tier kept ({code.fallback})")
+        return tier
+    head = "code-first: " + "; ".join(code.reasons[:-1])
+    code_idx = TIERS.index(code.tier)
+    if code_idx <= tier:
+        reasons.append(f"{head}; code tier {code.tier} does not raise {TIERS[min(tier, TOP)]}")
+        return tier
+    if downs:
+        reasons.append(f"{head}; code tier {code.tier} not applied: the prompt asks for a "
+                       f"small or step-by-step change")
+        return tier
+    if any(u.startswith(_CODE_UP + _CRITICAL_UP) for u in ups):
+        reasons.append(f"{head}; code tier {code.tier} not applied: the keyword route already "
+                       f"rose for this code")
+        return tier
+    new = min(_climb(tier, 1), code_idx)
+    reasons.append(f"{head}; +1 -> {TIERS[new]} (code tier {code.tier})")
+    return new
+
+
+PREDICT_KINDS = {"tests", "bugfix", "feature", "refactor", "perf", "migration", "security",
+                 "debugging"}
+
+
+def _unsure(d: Decision, cfg: Config) -> str | None:
+    """Why routing is unsure enough to ask for a change prediction, or None. Never for
+    questions, design, trivial edits or a task already at T4 by rule."""
+    if d.task_class.kind not in PREDICT_KINDS or d.t4_rules:
+        return None
+    if not d.location.candidates:
+        return None                 # nothing to show the model; it would only guess
+    if d.confidence < float(cfg["llm"]["threshold"]):
+        return f"low confidence {d.confidence:.2f}"
+    code = d.code
+    if code and code.get("applies"):
+        bands, margin = cfg["code_first"]["bands"], float(cfg["predict"]["boundary"])
+        s = code.get("score")
+        edge = next((e for e in bands if s is not None and abs(s - e) < margin), None)
+        if edge is not None:
+            return f"code score {s:.2f} near the {edge:.2f} edge"
+        kt, ct = code.get("keyword_tier"), code.get("tier")
+        if kt and ct and abs(TIERS.index(kt) - TIERS.index(ct)) >= 2:
+            return f"keywords say {kt}, code says {ct}"
+    return None
+
+
+def _predict_adjust(tier: int, keyword_tier: int, pr, tc: TaskClass, risk: Risk,
+                    critical_up: bool, cfg: Config, reasons: list[str],
+                    code_rose: bool = False) -> tuple[int, bool]:
+    """Move the tier by one at most on Haiku's predicted change. The result stays within one
+    tier of the keyword route; a critical path is never lowered and T4 rules apply after.
+    `code_rose`: the keyword route already rose for complex, risky or critical code, so a
+    large prediction does not raise it a second time for the same reason."""
+    head = f"change prediction: {pr.summary()} -> {pr.size}"
+    if pr.confidence < float(cfg["predict"]["min_confidence"]):
+        reasons.append(f"{head}; not used (confidence below "
+                       f"{float(cfg['predict']['min_confidence']):.2f})")
+        return tier, False
+    t = min(tier, TOP)
+    if pr.size == "small":
+        if critical_up or risk.critical:
+            reasons.append(f"{head}; not lowered on a critical path")
+            return tier, False
+        if tc.kind == "perf":
+            # a small patch says nothing about the measuring it takes to find it
+            reasons.append(f"{head}; perf work is not lowered")
+            return tier, False
+        floor = 1 if tc.kind in SUBSTANTIVE else 0
+        new = max(t - 1, floor, keyword_tier - 1)
+        if new >= t:
+            reasons.append(f"{head}; already at the floor")
+            return tier, False
+        reasons.append(f"{head}; -1 -> {TIERS[new]}")
+        return new, True
+    if pr.size == "large":
+        if code_rose:
+            reasons.append(f"{head}; the route already rose for this code")
+            return tier, False
+        new = min(_climb(t, 1), _climb(keyword_tier, 1))
+        if new <= t:
+            reasons.append(f"{head}; the code already raised it")
+            return tier, False
+        reasons.append(f"{head}; +1 -> {TIERS[min(new, TOP)]}")
+        return new, True
+    reasons.append(f"{head}; no change")
+    return tier, False
+
+
 def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: list[dict],
-           cfg: Config, conf: float) -> Decision:
+           cfg: Config, conf: float, workspace=None, prediction=None) -> Decision:
     reclassed = _unanchored_bug(tc, loc)
     note = ["bug report names no code ccr can find: treated as debugging (explore first)"] \
         if reclassed is not tc else []
@@ -499,6 +628,18 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     code_floor = _climb(base, 1) if any(u.startswith(_CODE_UP) for u in ups) else 0
     tier = _descend(tier, downs, kind, critical_up, reasons, code_floor)
     _risk_note(kind, risk, ups, downs, reasons)
+
+    keyword_tier = tier
+    code = None
+    if cfg["code_first"]["enabled"]:
+        from ccr.route.code import code_tier
+        code = code_tier(tc, loc, risk, cfg, workspace)
+        tier = _code_raise(tier, code, ups, downs, reasons)
+    predict_used = False
+    if prediction is not None:
+        code_rose = any(u.startswith(_CODE_UP + _CRITICAL_UP) for u in ups)
+        tier, predict_used = _predict_adjust(tier, keyword_tier, prediction, tc, risk,
+                                             critical_up, cfg, reasons, code_rose)
 
     # history (learning loop, ccr/history/learn.py)
     from ccr.history import learn
@@ -536,4 +677,6 @@ def _route(tc: TaskClass, loc: Location, risk: Risk, budget: Budget, records: li
     return Decision(task_class=tc, location=loc, risk=risk, budget=budget, tier=t,
                     base=base_name, confidence=conf, reasons=reasons, t4_rules=t4,
                     history=learned.note, area=area,
-                    bumps=[u.split(" (")[0] for u in ups], reclassed=bool(note))
+                    bumps=[u.split(" (")[0] for u in ups], reclassed=bool(note),
+                    code=code.to_dict() if code is not None else None,
+                    predict_used=predict_used)

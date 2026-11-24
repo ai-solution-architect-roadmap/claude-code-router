@@ -45,6 +45,8 @@ class Location:
     terms: list[str] = field(default_factory=list)         # plain words that matched paths
     broad_terms: list[str] = field(default_factory=list)
     memory_terms: list[str] = field(default_factory=list)
+    workspace: list[str] = field(default_factory=list)     # candidates with uncommitted edits
+    recent: list[str] = field(default_factory=list)        # candidates from recent commits
     confidence: float = 0.0
     graph: bool = False
     notes: list[str] = field(default_factory=list)
@@ -309,6 +311,50 @@ def _match_memory(c: _Ctx, memory) -> None:
             c.acc.add(p, 0.55 / math.sqrt(len(hits)), f"memory entity '{term}'")
 
 
+WS_MATCHED = 0.5      # an uncommitted edit to a file the prompt points at
+WS_UNANCHORED = 0.5   # an uncommitted edit when the prompt names no code (split over files)
+WS_NEARBY = 0.2       # an uncommitted edit next to a file the prompt points at
+WS_MAX_UNANCHORED = 10
+RECENT_MATCHED = 0.25  # a file the prompt points at that changed in the last few commits
+
+
+def _match_workspace(c: _Ctx, ws) -> None:
+    """5) the real repository state (code-first routing): uncommitted edits and files from
+    recent commits. Edits the prompt already points at get stronger; when the prompt names
+    no code at all, the files being edited right now are the best guess."""
+    if ws is None or not ws.available:
+        return
+    from ccr.graph.files import in_skipped_dir, is_test_path
+    loc = c.loc
+    before = {p: conf for p, conf, _ in c.acc.items()}
+    strong = {p for p, conf in before.items() if conf >= 0.4}
+    anchored = bool(loc.explicit) or bool(strong)
+    dirty = [p for p in ws.dirty if not p.startswith(TOOL_CONFIG_PREFIXES)
+             and not in_skipped_dir(p) and (p in c.uni_set or (c.root / p).is_file())]
+    strong_dirs = {posixpath.dirname(p) for p in strong}
+    unanchored = [p for p in dirty if p not in before]
+    for p in dirty:
+        if before.get(p, 0.0) >= 0.2:
+            c.acc.add(p, WS_MATCHED, f"uncommitted edit ({ws.dirty[p]} lines)")
+        elif not anchored and len(unanchored) <= WS_MAX_UNANCHORED:
+            c.acc.add(p, WS_UNANCHORED / math.sqrt(len(unanchored)),
+                      f"uncommitted edit ({ws.dirty[p]} lines), prompt names no file")
+        elif posixpath.dirname(p) in strong_dirs:
+            c.acc.add(p, WS_NEARBY, "uncommitted edit next to a matched file")
+        else:
+            continue
+        loc.workspace.append(p)
+        if is_test_path(p):
+            c.tests.add(p)
+        if p not in c.uni_set:
+            c.universe.append(p)
+            c.uni_set.add(p)
+    for p in ws.recent:
+        if p not in ws.dirty and before.get(p, 0.0) >= 0.2:
+            c.acc.add(p, RECENT_MATCHED, "changed in a recent commit")
+            loc.recent.append(p)
+
+
 def _rank(c: _Ctx) -> list[Candidate]:
     cands = []
     for p, conf, reasons in c.acc.items():
@@ -322,9 +368,10 @@ def _rank(c: _Ctx) -> list[Candidate]:
 
 
 def locate(task: str, root: str | Path, graph=None, memory=None,
-           files: list[str] | None = None) -> Location:
+           files: list[str] | None = None, workspace=None) -> Location:
     """Find candidate files for `task`. `graph`: open ccr.graph.Graph or None; `memory`:
-    ccr.memory.MemoryReport or None; `files`: override the file universe (tests)."""
+    ccr.memory.MemoryReport or None; `files`: override the file universe (tests);
+    `workspace`: ccr.evaluate.workspace.Workspace (code-first routing) or None."""
     root = Path(root).resolve()
     loc = Location(graph=graph is not None)
     if files is not None:
@@ -343,6 +390,7 @@ def locate(task: str, root: str | Path, graph=None, memory=None,
     used_words = _match_identifiers(c)
     _match_words(c, used_words)
     _match_memory(c, memory)
+    _match_workspace(c, workspace)
 
     cands = _rank(c)
     loc.candidates = cands[:MAX_CANDIDATES]

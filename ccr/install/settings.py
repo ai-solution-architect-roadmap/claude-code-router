@@ -20,7 +20,9 @@ from ccr.install.command import HookCommand, is_ours, our_subcommand, split
 # event -> (ccr hook name, timeout seconds). Claude Code timeouts are in seconds.
 HOOKS = {
     "SessionStart": ("session-start", 5),
-    "UserPromptSubmit": ("prompt", 5),
+    # room for the optional Haiku change prediction (predict.timeout_s <= 13 s); without it
+    # the internal watchdog (hooks.watchdog_ms, 1.5 s) still ends the hook first
+    "UserPromptSubmit": ("prompt", 15),
     "SubagentStop": ("stop", 5),
     "Stop": ("stop", 5),
 }

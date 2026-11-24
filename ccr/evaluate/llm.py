@@ -33,19 +33,28 @@ class LLMUnavailable(RuntimeError):
     pass
 
 
-def claude_command(model: str, effort: str) -> list[str]:
+def claude_command(model: str, effort: str, lean: bool = False) -> list[str]:
     exe = shutil.which("claude")
     if not exe:
         raise LLMUnavailable("`claude` CLI not found on PATH")
     # no tools, no MCP servers, no saved session: a single cheap classification turn
-    return [exe, "-p", "--model", model, "--effort", effort, "--output-format", "json",
-            "--tools", "", "--strict-mcp-config", "--no-session-persistence"]
+    cmd = [exe, "-p", "--model", model, "--effort", effort, "--output-format", "json",
+           "--tools", "", "--strict-mcp-config", "--no-session-persistence"]
+    if lean:
+        # start faster: with an API key, minimal mode skips hooks, plugins and memory (about
+        # 0.7 s in total); otherwise skip project settings (and their hooks) and slash
+        # commands, which saves about 0.4 s of the CLI's ~4 s start-up
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            cmd.append("--bare")
+        else:
+            cmd += ["--setting-sources", "user", "--disable-slash-commands"]
+    return cmd
 
 
 def run_claude(prompt: str, *, model: str = "haiku", effort: str = "low",
-               timeout: float = 45) -> dict:
+               timeout: float = 45, lean: bool = False) -> dict:
     """Run the user's claude CLI headlessly; return its JSON result object. Mock me in tests."""
-    cmd = claude_command(model, effort)
+    cmd = claude_command(model, effort, lean)
     env = {**os.environ, "CCR_INTERNAL": "1"}   # ccr hooks no-op inside this call
     env.pop("CLAUDE_CODE_EFFORT_LEVEL", None)
     try:

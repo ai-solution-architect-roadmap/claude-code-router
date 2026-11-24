@@ -169,6 +169,15 @@ Prompt length is not a signal. The code the task touches is.
 
 `ccr explain "<task>"` shows each step with its reasons and scores. It runs nothing.
 
+**Code-first routing (opt in).** With `code_first.enabled: true`, your uncommitted edits
+and recent commits also help find the files, and a score of that code (files, lines already
+changed, dependents, complexity, tests, churn, critical paths, memory flags) can raise a real
+code change by one tier above the steps above. It never lowers a tier, never moves trivial
+edits or questions, and steps or small-scope words still win. With `predict.enabled: true`,
+prompts where routing is unsure also ask Haiku (your claude CLI, up to 10 s) to predict the
+change; a small change lowers the tier by one and a large one raises it by one, never past a
+T4 rule or below a critical path. See [Code-first routing](CODE_FIRST_ROUTING.md).
+
 ## Configuration reference (`.ccr/config.yaml`)
 
 `ccr init` creates a short config file and you commit it. Any key you leave out uses the
@@ -252,6 +261,21 @@ llm:                         # opt-in assist (`ccr explain --llm`, `ccr run`)
 routing:
   max_escalation: 2          # tiers above the class base without a T4 rule
   ceiling_without_critical: T3
+
+code_first:                  # opt in: the code can raise a change, see docs/CODE_FIRST_ROUTING.md
+  enabled: false
+  recent_commits: 5          # files from the last N commits strengthen a match
+  min_confidence: 0.5        # location confidence needed to route from the code
+  bands: [0.2, 0.4, 0.6]     # code score edges: T1 | T2 | T2H | T3
+  tie_margin: 0.04           # near an edge, the keyword class breaks the tie
+
+predict:                     # opt in: Haiku predicts the change when routing is unsure
+  enabled: false
+  model: haiku
+  effort: low
+  timeout_s: 10              # hard limit (max 13); a late answer leaves routing as it was
+  min_confidence: 0.6
+  boundary: 0.08             # code score this close to a band edge counts as unsure
 
 run:                         # headless `ccr run`
   test_command: null         # e.g. "pytest -q"; must exit 0 for success
@@ -338,8 +362,9 @@ The prompt hook uses that state in two ways:
 | Stop, SubagentStop | `ccr hook stop` | adds tokens (once per message id), subagent types, tool errors and failure hints to the pending task |
 
 Every hook **fails open**. Bad input, a missing or corrupt config or graph, an exception,
-or a run longer than the watchdog (`hooks.watchdog_ms`, 1.5 s; Claude Code's own timeout is
-set to 5 s) produces no output and exit code 0. The hook never exits with code 2, so a
+or a run longer than the watchdog (`hooks.watchdog_ms`, 1.5 s, or `predict.timeout_s` + 1 s
+for the prompt hook when the change prediction is on; Claude Code's own timeout is 15 s for
+the prompt hook and 5 s for the others) produces no output and exit code 0. The hook never exits with code 2, so a
 prompt is never blocked. Hooks import neither typer nor tree-sitter and only read the
 graph. A warm prompt hook takes about 60 ms in-process and about 150 ms as a process.
 Problems go to `.ccr/local/hooks.log`. Set `CCR_HOOK_DEBUG=1` to also log input field

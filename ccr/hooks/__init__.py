@@ -49,6 +49,8 @@ def _body(name: str, raw: bytes, environ, result: dict) -> tuple[str | None, obj
     cfg = load_config(root)
     if not environ.get("CCR_HOOK_WATCHDOG_MS"):
         result["budget"] = float(cfg["hooks"]["watchdog_ms"]) / 1000.0
+        if cfg["predict"]["enabled"] and name == "prompt":   # room for the Haiku prediction
+            result["budget"] = max(result["budget"], float(cfg["predict"]["timeout_s"]) + 1.0)
     if cfg.errors and name != "session-start":
         return None, root            # corrupt config: stay out of the way (doctor reports it)
     if not cfg["hooks"]["enabled"]:
