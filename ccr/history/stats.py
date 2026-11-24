@@ -6,6 +6,9 @@
   tokens       input + output + cache-creation tokens (cache reads excluded)
   cost         `total_cost_usd` as reported by `claude -p` (ccr run, LLM assist); interactive
                subscription sessions report no cost, so they show tokens only
+  prompt hints tasks whose prompt got a linter hint (`lint` on the record) against the other
+               interactive tasks: success rate, average turns and tool errors. A first look,
+               not a controlled comparison: vague prompts are harder work to begin with
 """
 from __future__ import annotations
 
@@ -47,6 +50,29 @@ def _finish(b: dict) -> dict:
     b["cost_usd"] = round(b["cost_usd"], 6)
     b["tiers"] = dict(sorted(b["tiers"].items()))
     return b
+
+
+def lint_effect(tasks: list[dict]) -> dict | None:
+    """Hinted vs. other hook tasks: {"hinted": {...}, "other": {...}} or None before any
+    hint was recorded."""
+    groups = {"hinted": [], "other": []}
+    for r in tasks:
+        if r.get("source") == "hook":
+            groups["hinted" if isinstance(r.get("lint"), dict) else "other"].append(r)
+    if not groups["hinted"]:
+        return None
+    out = {}
+    for k, rs in groups.items():
+        b = _bucket()
+        for r in rs:
+            _add(b, r)
+        _finish(b)
+        turns = [_num(r.get("turns")) for r in rs if r.get("turns")]
+        out[k] = {"tasks": b["tasks"], "success_rate": b["success_rate"],
+                  "avg_turns": round(sum(turns) / len(turns), 1) if turns else None,
+                  "avg_tool_errors": round(sum(_num(r.get("tool_errors")) for r in rs)
+                                           / len(rs), 2) if rs else None}
+    return out
 
 
 def compute(records: list[dict], cfg) -> dict:
@@ -96,6 +122,7 @@ def compute(records: list[dict], cfg) -> dict:
         "tiers": tiers,
         "areas": {k: _finish(v) for k, v in sorted(by_area.items())},
         "classes": {k: _finish(v) for k, v in sorted(by_class.items())},
+        "lint": lint_effect(tasks),
         "learning": summarize(tasks, cfg),
         "savings": savings.estimate(tasks, cfg),
         "misroutes": savings.misroutes(tasks, cfg),
@@ -152,6 +179,14 @@ def format_text(s: dict, root=None, when=None, detail: bool = False) -> list[str
     if s.get("manual_escalations") or s.get("possible_reworks"):
         out.append(f"           {s['manual_escalations']} manual move(s) to a stronger model, "
                    f"{s['possible_reworks']} possible rework(s) after a cheap answer")
+    lint = s.get("lint")
+    if lint:
+        def side(b):
+            return (f"{b['tasks']} task(s), success {_pct(b['success_rate'])}, "
+                    f"{'-' if b['avg_turns'] is None else b['avg_turns']} turns, "
+                    f"{'-' if b['avg_tool_errors'] is None else b['avg_tool_errors']} tool errors")
+        out.append(f"Prompt hints: hinted {side(lint['hinted'])} | others {side(lint['other'])}"
+                   " (averages per task)")
     out += savings.format_lines(s["savings"], s["misroutes"], detail)
     if root is not None:
         out += shadow.format_lines(shadow.summarize(shadow.read(root)))

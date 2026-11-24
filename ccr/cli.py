@@ -145,10 +145,15 @@ def explain(task: str = typer.Argument(..., help="The task prompt to evaluate"),
     """Show the tier decision, scores, touched files and reasoning. Runs nothing."""
     from ccr.route import decide
     d = decide(task, path.resolve(), allow_llm=llm)
+    from ccr.config import load_config
+    from ccr.evaluate.lint import lint as lint_prompt
+    found = lint_prompt(task, d, cfg=load_config(path.resolve()), root=path.resolve())
     if as_json:
-        typer.echo(json.dumps(d.to_dict(), indent=2))
+        typer.echo(json.dumps({**d.to_dict(), "lint": {"code": found.code, "hint": found.hint,
+                                                       "suggest": found.suggest}
+                               if found else None}, indent=2))
         return
-    for line in format_decision(task, d):
+    for line in format_decision(task, d, found):
         typer.echo(line)
 
 

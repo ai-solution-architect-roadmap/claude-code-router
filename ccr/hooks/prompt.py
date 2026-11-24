@@ -8,6 +8,11 @@ Silent for: `!noroute` anywhere in the prompt (a leading `!` is bash mode in the
 CLI, so a trailing `!noroute` is the practical form), slash commands, synthetic user turns
 such as `<task-notification>` (a background subagent finishing), short chatter
 ("thanks", "yes go on"), `hooks.route_prompts: false`, a corrupt graph or config.
+
+Prompt linting (`lint.mode`, ccr/evaluate/lint.py): a vague prompt also gets one hint line
+for the user, e.g. "No file named. Did you mean `app/config.py`?". The hint never blocks
+unless `lint.mode: strict`, and the task record notes it (`lint`) so its effect on turns and
+failures can be measured. `!nolint` skips the linter for one prompt.
 """
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ from ccr.hooks.common import (EFFORT_RANK, Msg, effort_level, load_session, log,
 from ccr.hooks.tasks import finalize, infer_outcome, is_retry, start
 
 NOROUTE = re.compile(r"(?:^|\s)!noroute\b", re.I)
+NOLINT = re.compile(r"(?:^|\s)!nolint\b", re.I)
 # Messages Claude Code injects as user turns (background task results, slash command
 # echoes, bash-mode output): `<task-notification>`, `<command-name>`, `<bash-stdout>`, ...
 SYNTHETIC = re.compile(r"^\s*<(?:task-notification|system-reminder|[a-z]+(?:-[a-z]+)+)[\s>]")
@@ -182,7 +188,7 @@ def escalation_signals(prompt: str, pending: dict, session: dict, d, main, cfg,
 
 def _record(root, sid, tp, session: dict, pending, d, tier, kind: str, area: str, fact: str,
             retry: bool, escalated_from, main, outcome: str | None, prompt: str = "",
-            cfg=None) -> None:
+            cfg=None, lint_rec: dict | None = None) -> None:
     """Close the previous task and start tracking this one in the session file."""
     from ccr.config import TIERS
     if tp:
@@ -205,7 +211,8 @@ def _record(root, sid, tp, session: dict, pending, d, tier, kind: str, area: str
         "ts": int(time.time()), "class": kind, "area": area, "tier": tier.name,
         "model": tier.model, "effort": tier.effort, "risk": d.risk.score,
         "confidence": d.confidence, "source": "hook", "escalated_from": escalated_from,
-        "main_model": model_alias(main), "trace": d.trace()})
+        "main_model": model_alias(main), "trace": d.trace(),
+        **({"lint": lint_rec} if lint_rec else {})})
     session["facts"] = fact
     if d.location.candidates:
         session["files"] = [c.path for c in d.location.candidates[:3]]
@@ -260,6 +267,55 @@ def _decide(prompt, root, cfg, g, tp, session, pending, retry):
     return d, inherit, note
 
 
+def _prompt_key(prompt: str) -> str:
+    import hashlib
+    return hashlib.sha256(" ".join(prompt.split()).lower().encode()).hexdigest()[:16]
+
+
+def prompt_lint(prompt: str, d, root, cfg, session: dict, pending, retry: bool,
+                sid: str | None = None):
+    """(Lint or None, block reason or None) for this prompt. Retries and follow-ups that lean
+    on the conversation are never linted: "fix it" after a discussion is clear enough.
+    Strict mode stops a vague prompt once; the same prompt sent again goes through."""
+    from ccr.evaluate import lint as L
+    m = L.mode(cfg)
+    if m == "off" or retry or NOLINT.search(prompt) or \
+            (pending is not None and is_followup(prompt, d)):
+        return None, None
+    try:
+        found = L.lint(prompt, d, cfg=cfg, root=root)
+    except Exception as e:  # noqa: BLE001   a hint is never worth a lost routing line
+        log(root, f"prompt lint failed: {e.__class__.__name__}: {e}")
+        return None, None
+    if found is None or m != "strict" or not sid:   # no session: cannot let a resend through
+        return found, None
+    key = _prompt_key(prompt)
+    if session.get("lint_blocked") == key:
+        session.pop("lint_blocked", None)
+        return found, None
+    session["lint_blocked"] = key
+    return found, (f"ccr lint (strict): {found.hint} Add the detail and send again, or send "
+                   "the same prompt again (or add !nolint) to go ahead as it is.")
+
+
+def _lint_step(prompt, d, root, cfg, sid, session: dict, pending, retry: bool):
+    """(Lint or None, early result or None). The early result ends the hook: a strict-mode
+    block, a hint alone for chatter that opens a session ("fix it"), or "" for chatter that
+    continues the current task ("thanks", "yes go on")."""
+    found, block = prompt_lint(prompt, d, root, cfg, session, pending, retry, sid)
+    if block:
+        try:
+            save_session(root, sid, session)   # remembers the stopped prompt; task untouched
+        except Exception as e:  # noqa: BLE001
+            log(root, f"prompt lint state not saved: {e.__class__.__name__}: {e}")
+        return found, Msg("", block=block)
+    if not retry and is_chatter(prompt, d):
+        if found and pending is None:
+            return found, Msg("", hint=found.hint)
+        return found, ""
+    return found, None
+
+
 def run(data: dict, root, cfg) -> str | None:
     if not cfg["hooks"]["route_prompts"]:
         return None
@@ -280,9 +336,10 @@ def run(data: dict, root, cfg) -> str | None:
     pending = session.get("pending") if isinstance(session.get("pending"), dict) else None
     retry = pending is not None and is_retry(prompt)
     d, inherit, follow_note = _decide(prompt, root, cfg, g, tp, session, pending, retry)
-
-    if not retry and is_chatter(prompt, d):
-        return None                      # "thanks", "yes go on": the current task continues
+    found, early = _lint_step(prompt, d, root, cfg, sid, session, pending, retry)
+    if early is not None:
+        return early or None
+    hint = found.hint if found else None
 
     kind, area, fact = d.task_class.kind, d.area, facts(d)
     tier, escalated_from, notes = d.tier, None, []
@@ -311,8 +368,9 @@ def run(data: dict, root, cfg) -> str | None:
 
     try:   # bookkeeping is best effort: the routing line is still worth emitting
         outcome = infer_outcome(prompt, session, cfg) if pending is not None else None
+        lint_rec = {**found.record(), "mode": cfg["lint"]["mode"]} if found else None
         _record(root, sid, tp, session, pending, d, tier, kind, area, fact, retry,
-                escalated_from, main, outcome, prompt, cfg)
+                escalated_from, main, outcome, prompt, cfg, lint_rec)
         if cfg["hooks"]["store_prompts"] and isinstance(session.get("pending"), dict):
             from ccr.history import prompts
             prompts.append(root, prompts.snapshot(
@@ -320,4 +378,4 @@ def run(data: dict, root, cfg) -> str | None:
                 cfg["hooks"]["redact_prompts"]))
     except Exception as e:  # noqa: BLE001
         log(root, f"prompt bookkeeping failed: {e.__class__.__name__}: {e}")
-    return Msg(text, ui_line(d, tier, kind, fact, retry))
+    return Msg(text, ui_line(d, tier, kind, fact, retry), hint=hint)

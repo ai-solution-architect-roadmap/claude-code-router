@@ -71,12 +71,26 @@ def _body(name: str, raw: bytes, environ, result: dict) -> tuple[str | None, obj
     event = EVENT.get(name)
     if event is None:
         return None, root
+    return _output(text, event, cfg), root
+
+
+def _output(text, event: str, cfg) -> str | None:
+    """Hook stdout JSON for a run's Msg: model context, user line(s), or a block."""
     import json
-    out = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
+    block = getattr(text, "block", None)
+    if block:       # strict prompt linting: Claude Code drops the prompt and shows the reason
+        return json.dumps({"decision": "block", "reason": str(block)})
+    out = {}
+    if str(text):
+        out["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": str(text)}
     ui = getattr(text, "ui", None)
-    if ui and cfg["hooks"]["show_in_ui"]:
-        out["systemMessage"] = str(ui)
-    return json.dumps(out), root
+    shown = [str(ui)] if ui and cfg["hooks"]["show_in_ui"] else []
+    hint = getattr(text, "hint", None)
+    if hint:        # the prompt linter's hint is shown even with show_in_ui off
+        shown.append(f"ccr hint: {hint}")
+    if shown:
+        out["systemMessage"] = "\n".join(shown)
+    return json.dumps(out) if out else None
 
 
 def main(args: list[str], *, stdin=None, stdout=None, environ=None,
