@@ -1,0 +1,22 @@
+{
+  "name": "claude-code-tier-router",
+  "version": "0.2.0",
+  "description": "Route Claude Code tasks to the cheapest sufficient model and effort (npm launcher for the claude-code-router Python package)",
+  "license": "MIT",
+  "author": "Satya Prakash Tiwari",
+  "homepage": "https://github.com/ai-solution-architect-roadmap/claude-code-router",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ai-solution-architect-roadmap/claude-code-router.git",
+    "directory": "npm"
+  },
+  "bugs": "https://github.com/ai-solution-architect-roadmap/claude-code-router/issues",
+  "keywords": ["claude-code", "llm", "routing", "model-routing", "cost-optimization", "cli"],
+  "bin": {
+    "ccr": "bin/ccr.js"
+  },
+  "files": ["bin/", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=18"
+  }
+}

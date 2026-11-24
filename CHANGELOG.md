@@ -4,12 +4,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.2.0] - unreleased
+
 ### Added
 - Code-first routing behind `code_first.enabled` (off by default): uncommitted edits and
   recent commits help locate the files, and a score of that code can raise a real code change
   by one tier. Trivial edits, questions, steps and small-scope wording keep their keyword tier.
 - Haiku change prediction behind `predict.enabled` (off by default): when routing is unsure,
   Haiku predicts the files, size and contract changes, and the tier moves by one at most. See `docs/CODE_FIRST_ROUTING.md`.
+- npm launcher package `claude-code-tier-router` (in `npm/`): installs `ccr` with npm and
+  runs the matching PyPI release from a private Python environment.
+- Release workflow publishes to npm after PyPI and checks that the tag matches both versions.
+
+### Fixed
+- Routing inconsistencies between near-identical prompts (found with a 48-prompt probe set).
 
 ## [0.1.1] - 2026-10-17
 
